@@ -1,0 +1,17 @@
+[package]
+name = "image-shelf"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+rune = { git = "https://github.com/anomalyco/rune", rev = "8ee30954add065098f043335ece9d9ea0914d21d" }
+blake3 = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5.2"
+objc2-foundation = "0.2.2"
+
+[profile.dev.package."*"]
+debug = false

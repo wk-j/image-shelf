@@ -15,6 +15,6 @@ for a,b in zip(keys[:2],keys[1:3]):
     ra,rb=nodes[a]['bounds'],nodes[b]['bounds']
     assert ra[1]==rb[1] and ra[3]==rb[3]
     assert rb[0]-(ra[0]+ra[2])==4
-assert nodes['preview']['bounds']==[10,112,200,110]
+assert nodes['preview']['bounds']==[22,112,200,110]
 assert 'quit' not in nodes and 'copy' not in nodes and 'pause' not in nodes
 print('PASS: 3 controls centered; compact spacing and preview margins verified')

@@ -12,6 +12,7 @@ struct Entry {
 }
 struct State {
     entries: Vec<Entry>,
+    shell: [Image; 2],
     cache: ImageCache,
     dir: PathBuf,
     selected: usize,
@@ -34,6 +35,7 @@ impl State {
             });
         let mut s = Self {
             entries: vec![],
+            shell: notch_surfaces(),
             cache: ImageCache::new(Arc::new(|| {})),
             dir,
             selected: 0,
@@ -219,7 +221,8 @@ fn button(v: &str, x: f32, y: f32, w: f32) -> El {
     el().absolute(x, y)
         .size(w, 24.)
         .radius(8.)
-        .fill(c(0x000000))
+        .gradient(c(0x24262d), c(0x13151a))
+        .border(0.5, c(0x373a44))
         .hit()
         .cursor(rune::Cursor::Pointer)
         .center()
@@ -230,15 +233,18 @@ fn picture(e: &Entry, x: f32, y: f32, w: f32, h: f32) -> El {
     let (pw, ph) = (e.size.0 as f32 * ratio, e.size.1 as f32 * ratio);
     el().absolute(x, y)
         .size(w, h)
-        .fill(c(0x101010))
-        .radius(10.)
+        .gradient(c(0x191b22), c(0x0e0f13))
+        .radius(8.)
+        .clip_rounded(8.)
         .child(
             el().absolute((w - pw) / 2., (h - ph) / 2.)
                 .size(pw, ph)
                 .pixels(e.image.pixels()),
         )
 }
-const ISLAND_W: f32 = 220.;
+const ISLAND_W: f32 = 244.;
+const BODY_W: f32 = 220.;
+const SHOULDER: f32 = 12.;
 const COMPACT_H: f32 = 52.;
 const EXPANDED_H: f32 = 230.;
 // Both horizontal trackpad motion and a conventional vertical wheel browse history.
@@ -297,15 +303,25 @@ fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
         _ => {}
     }
 }
+fn notch_surfaces() -> [Image; 2] {
+    let cache = ImageCache::new(Arc::new(|| {}));
+    [COMPACT_H, EXPANDED_H].map(|h| {
+        let r = if h == COMPACT_H { 20. } else { 24. };
+        // Concave shoulders flow from the screen edge into the vertical sides.
+        // Transparent cutouts are part of the window, never painted with a wallpaper color.
+        let path = format!("M0 0 H244 C237.373 0 232 5.373 232 12 V{} Q232 {} {} {} H{} Q12 {} 12 {} V12 C12 5.373 6.627 0 0 0 Z", h-r, h, 232.-r, h, 12.+r, h, h-r);
+        let svg = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="244" height="{h}" viewBox="0 0 244 {h}"><defs><linearGradient id="g" x2="0" y2="1"><stop stop-color="#090a0d"/><stop offset="1" stop-color="#111319"/></linearGradient></defs><path d="{path}" fill="url(#g)"/></svg>"##);
+        let image = cache.svg(svg.into_bytes(), 244., 2.);
+        let _ = image.wait();
+        image
+    })
+}
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut root = el()
         .key("notch")
         .on_wheel(wheel)
-        .w_full()
-        .h_full()
-        .fill(c(0))
-        .corners([0., 0., 18., 18.])
-        .clip_corners([0., 0., 18., 18.])
+        .absolute(SHOULDER, 0.)
+        .size(BODY_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
         .on_secondary_press(|s: &mut State, press: rune::PointerPress, tx| {
             tx.popup_menu(menu(s), press, menu_action)
         })
@@ -330,7 +346,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                         )
                     },
                     11.,
-                    0x999999,
+                    0xb7bbc6,
                 )),
         )
         .child(
@@ -356,6 +372,19 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .key("expand")
                 .on_press_tx(toggle),
         );
+    // Restrained edge lighting and a live capture indicator, without extra chrome.
+    root = root.child(
+        el().absolute(51., 24.)
+            .size(3., 3.)
+            .radius(1.5)
+            .fill(c(if s.paused { 0xe3ac68 } else { 0x8ce6d4 })),
+    );
+    if s.expanded {
+        root = root.child(el().absolute(10., 51.).size(200., 0.5).linear_gradient(
+            0.,
+            [(0., c(0x15171d)), (0.5, c(0x353b48)), (1., c(0x15171d))],
+        ));
+    }
     if !s.entries.is_empty() {
         let mut compact = el()
             .absolute(10., 10.)
@@ -389,7 +418,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .key(format!("image-{i}"))
                     .hit()
                     .cursor(rune::Cursor::Grab)
-                    .border(if i == s.selected { 1. } else { 0. }, c(0xbbbbbb))
+                    .border(if i == s.selected { 1. } else { 0. }, c(0x8ce6d4))
                     .on_press(move |s: &mut State| {
                         s.selected = i;
                         s.scroll = i as f32;
@@ -403,6 +432,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             root = root.child(
                 picture(e, 10., 112., 200., 110.)
                     .key("preview")
+                    .border(0.6, c(0x353944))
                     .hit()
                     .cursor(rune::Cursor::Grab)
                     .drag_out(|s: &State| s.drag(s.selected))
@@ -410,7 +440,14 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             );
         }
     }
-    root
+    el().w_full()
+        .h_full()
+        .child(
+            el().absolute(0., 0.)
+                .size(ISLAND_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
+                .pixels(s.shell[usize::from(s.expanded)].pixels()),
+        )
+        .child(root)
 }
 fn main() {
     rune::App::new(AppSpec {
@@ -455,6 +492,7 @@ mod tests {
     fn demo_drag_has_png_and_never_fake_file() {
         let mut s = State {
             entries: vec![],
+            shell: notch_surfaces(),
             cache: ImageCache::new(Arc::new(|| {})),
             dir: PathBuf::new(),
             selected: 0,
@@ -467,7 +505,7 @@ mod tests {
             demo: true,
         };
         s.fixtures();
-        let mut rt = rune::Runtime::new(s, view, (220., 230.), rune::Env::new(true, 1.));
+        let mut rt = rune::Runtime::new(s, view, (244., 230.), rune::Env::new(true, 1.));
         rt.state.expanded = true;
         rt.frame(0.);
         rt.wheel_xy(30., 80., 0., -48.);
@@ -480,7 +518,7 @@ mod tests {
             .unwrap()
             .rect[0];
         assert!(
-            drawn > -59. && drawn < 10.,
+            drawn > -47. && drawn < 22.,
             "must animate between endpoints, got {drawn}"
         );
         for _ in 0..120 {

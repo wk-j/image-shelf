@@ -4,7 +4,7 @@ A macOS image clipboard shelf built with Rust + [Rune](https://github.com/anomal
 
 ## Minimal Dynamic Notch
 
-A black **220 × 52 pt** notch attaches to the top center of the primary display. Only the selected image, counter, previous/next and expand controls remain visible. Drag the image into another application. Click the counter or + to expand to **220 × 230 pt**, showing nearby thumbnails and a preview; − collapses it.
+A dark notch with a **220 × 52 pt** content area attaches to the top center of the primary display. Only the selected image, counter, previous/next and expand controls remain visible. Drag the image into another application. Click the counter or + to expand to **220 × 230 pt**, showing nearby thumbnails and a preview; − collapses it. The reference-style concave upper shoulders add 12 pt on each side (244 pt total window width). The outer cutouts and lower rounded corners are genuinely transparent, not painted to match a wallpaper.
 
 **Right-click anywhere on the island** for Copy image, Pause/Resume capture, Open history folder and Quit. All secondary actions remain available without consuming permanent screen space. The context menu also shows the latest operation/error status.
 

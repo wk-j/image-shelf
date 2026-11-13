@@ -16,7 +16,8 @@ struct Uniforms { viewport: vec4f, taps: array<vec4f, 5> }
     var light = 0.;
     for(var i=0u; i<5u; i++) {
         let tap = u.taps[i];
-        let age = tap.z;
+        // Speed up the entire wave clock, preserving crest spacing and damping.
+        let age = tap.z * (1.1 / 0.65);
         if tap.w == 0. || age < 0. || age > 1.1 { continue; }
         let delta = p - tap.xy;
         let distance = length(delta);

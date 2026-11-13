@@ -195,7 +195,7 @@ fn setup(s: &mut State, wake: Waker) {
 fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
     s.clock = t;
     let animating = !s.ripples.is_empty();
-    s.ripples.retain(|(_, start)| t - start < 1.1);
+    s.ripples.retain(|(_, start)| t - start < 0.65);
     if !s.ripples.is_empty() {
         tx.wake_after(Duration::from_millis(16));
     }

@@ -29,7 +29,7 @@ To build from source, run `./scripts/bundle.sh`, then open `out/Image Shelf.app`
 ## Usage
 
 - Keep the app running to capture copied images.
-- Scroll or use ‹ / › to browse; click a thumbnail to select it.
+- Scroll one image per wheel step/swipe, or use ‹ / ›; click a thumbnail to select it. Trackpad momentum does not advance selection.
 - Click + or the counter to expand; − collapses the island.
 - Drag a thumbnail or preview into an app that accepts images/files.
 - Right-click for **Copy image**, **Pause/Resume**, **Open history folder**, or **Quit**.

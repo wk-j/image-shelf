@@ -21,6 +21,9 @@ struct State {
     dir: PathBuf,
     selected: usize,
     scroll: f32,
+    wheel_last: f64,
+    wheel_total: f32,
+    wheel_latched: bool,
     expanded: bool,
     paused: bool,
     pending: bool,
@@ -47,6 +50,9 @@ impl State {
             dir,
             selected: 0,
             scroll: 0.,
+            wheel_last: -1.,
+            wheel_total: 0.,
+            wheel_latched: false,
             expanded: false,
             paused: std::env::args().any(|a| a == "--paused"),
             pending: false,
@@ -262,6 +268,11 @@ const COMPACT_H: f32 = 52.;
 const EXPANDED_H: f32 = 230.;
 // Both horizontal trackpad motion and a conventional vertical wheel browse history.
 fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
+    if event.precise && event.phase == rune::GesturePhase::Ended && !event.momentum {
+        s.wheel_total = 0.;
+        s.wheel_latched = false;
+        return true;
+    }
     let delta = if event.dx.abs() > event.dy.abs() {
         event.dx
     } else {
@@ -270,8 +281,43 @@ fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
     if !delta.is_finite() || delta == 0. || s.entries.is_empty() {
         return true;
     }
-    s.scroll = (s.scroll - delta / 48.).clamp(0., s.entries.len().saturating_sub(1) as f32);
-    s.selected = s.scroll.round() as usize;
+    // One deliberate gesture moves exactly one image. Never replay momentum or
+    // carry fractional deltas into the next gesture/selection.
+    if event.momentum {
+        return true;
+    }
+    if event.precise {
+        if event.phase == rune::GesturePhase::Began || s.clock - s.wheel_last > 0.2 {
+            s.wheel_total = 0.;
+            s.wheel_latched = false;
+        }
+        s.wheel_last = s.clock;
+        if event.phase == rune::GesturePhase::Ended {
+            s.wheel_total = 0.;
+            s.wheel_latched = false;
+            return true;
+        }
+        if s.wheel_latched {
+            return true;
+        }
+        s.wheel_total += delta;
+        if s.wheel_total.abs() < 10. {
+            return true;
+        }
+        s.wheel_latched = true;
+    } else {
+        if s.clock - s.wheel_last < 0.12 {
+            return true;
+        }
+        s.wheel_last = s.clock;
+        s.wheel_total = delta;
+    }
+    if s.wheel_total < 0. {
+        s.selected = (s.selected + 1).min(s.entries.len().saturating_sub(1));
+    } else {
+        s.selected = s.selected.saturating_sub(1);
+    }
+    s.scroll = s.selected as f32;
     tx.animated();
     true
 }
@@ -549,6 +595,9 @@ mod tests {
             dir: PathBuf::new(),
             selected: 0,
             scroll: 0.,
+            wheel_last: -1.,
+            wheel_total: 0.,
+            wheel_latched: false,
             expanded: false,
             paused: false,
             pending: false,
@@ -576,12 +625,17 @@ mod tests {
         for _ in 0..120 {
             rt.frame(1. / 60.);
         }
+        rt.state.clock += 0.3;
         rt.wheel_xy(30., 80., -99999., 0.);
         rt.frame(1. / 60.);
-        assert_eq!(rt.state.selected, 5);
+        assert_eq!(rt.state.selected, 2, "large delta moves only one image");
+        rt.state.clock += 0.3;
         rt.wheel_xy(30., 80., 99999., 0.);
         rt.frame(1. / 60.);
-        assert_eq!(rt.state.selected, 0);
+        assert_eq!(rt.state.selected, 1);
+        rt.state.selected = 0;
+        rt.state.scroll = 0.;
+        rt.state.clock += 0.3;
         rt.state.expanded = false;
         rt.wheel_xy(30., 20., 0., -48.);
         rt.frame(1. / 60.);
@@ -597,6 +651,53 @@ mod tests {
             ripple(&mut rt.state);
         }
         assert_eq!(rt.state.ripples.len(), 5, "bounded transient effects");
+        rt.state.clock += 0.3;
+        rt.wheel_event(
+            rune::WheelEvent::new(0., -3.)
+                .at(30., 20.)
+                .precise(true)
+                .phase(rune::GesturePhase::Began),
+        );
+        rt.frame(0.016);
+        assert_eq!(rt.state.selected, 2, "small trackpad noise is ignored");
+        rt.wheel_event(rune::WheelEvent::new(0., -20.).at(30., 20.).precise(true));
+        rt.frame(0.016);
+        assert_eq!(rt.state.selected, 3);
+        rt.wheel_event(rune::WheelEvent::new(0., -400.).at(30., 20.).precise(true));
+        rt.frame(0.016);
+        assert_eq!(rt.state.selected, 3, "same swipe cannot skip images");
+        rt.wheel_event(
+            rune::WheelEvent::new(0., 0.)
+                .at(30., 20.)
+                .precise(true)
+                .phase(rune::GesturePhase::Ended),
+        );
+        rt.frame(0.016);
+        // Rune recognizes a new phase immediately after finger lift as momentum.
+        rt.wheel_event(
+            rune::WheelEvent::new(0., -999.)
+                .at(30., 20.)
+                .precise(true)
+                .phase(rune::GesturePhase::Began),
+        );
+        rt.frame(0.016);
+        assert_eq!(rt.state.selected, 3, "inertia must not change selection");
+        rt.wheel_event(
+            rune::WheelEvent::new(0., 0.)
+                .at(30., 20.)
+                .precise(true)
+                .phase(rune::GesturePhase::Ended),
+        );
+        rt.frame(0.3);
+        rt.state.clock += 0.3;
+        rt.wheel_event(
+            rune::WheelEvent::new(0., 12.)
+                .at(30., 20.)
+                .precise(true)
+                .phase(rune::GesturePhase::Began),
+        );
+        rt.frame(0.016);
+        assert_eq!(rt.state.selected, 2, "next reverse swipe moves one image");
         let mut s = rt.state;
         let item = s.drag(0).unwrap();
         assert!(item.png_data().is_some());

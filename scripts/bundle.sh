@@ -3,7 +3,8 @@ set -eu
 cd "$(dirname "$0")/.."
 cargo build --release --locked
 APP="out/Image Shelf.app"
-mkdir -p "$APP/Contents/MacOS"
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp "${CARGO_TARGET_DIR:-target}/release/image-shelf" "$APP/Contents/MacOS/image-shelf"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -11,11 +12,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>image-shelf</string>
 <key>CFBundleIdentifier</key><string>local.wkj.image-shelf</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleName</key><string>Image Shelf</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.3.0</string>
+<key>CFBundleShortVersionString</key><string>0.3.1</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
-<key>CFBundleVersion</key><string>3</string>
+<key>CFBundleVersion</key><string>4</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST

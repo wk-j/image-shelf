@@ -1,25 +1,18 @@
 # Image Shelf
 
-A macOS image clipboard shelf built with Rust + [Rune](https://github.com/anomalyco/rune).
+An image clipboard shelf for macOS, built with Rust + [Rune](https://github.com/anomalyco/rune).
 
-## Minimal Dynamic Notch
+## Features
 
-A dark notch with a **300 × 52 pt** content area attaches to the top center of the primary display. Only the selected image, counter, previous/next and expand controls remain visible. Drag the image into another application. Click the counter or + to expand to **300 × 230 pt**, showing nearby thumbnails and a preview; − collapses it. The reference-style concave upper shoulders add 12 pt on each side (324 pt total window width). The outer cutouts and lower rounded corners are genuinely transparent, not painted to match a wallpaper. The dark island surface itself is translucent (62% opacity); images and controls remain legible and opaque.
+- Local, persistent image history with deduplication.
+- Compact, translucent island pinned to the top of the screen.
+- Smooth thumbnail scrolling, image previews, and GPU water-wave feedback.
+- Drag images into compatible apps or copy them for pasting.
+- No server, telemetry, or text clipboard history.
 
-**Right-click anywhere on the island** for Copy image, Pause/Resume capture, Open history folder and Quit. All secondary actions remain available without consuming permanent screen space. The context menu also shows the latest operation/error status.
+## Installation
 
-The macOS nonactivating panel avoids unnecessary app activation. It may overlap central menu-bar content, but does not modify the menu bar or hardware notch. Full-screen spaces/system dialogs may appear above it.
-
-- Watches for new clipboard images while running; PNG and macOS TIFF are supported.
-- Persistent, deduplicated PNG history and large previews with aspect ratio preserved.
-- Drag a thumbnail or preview into another application. Native macOS drag offers **PNG data and a PNG file URL**, with Copy only, never Move.
-- Copy a saved image for regular Cmd-V paste.
-- Pause/resume capture and open the history folder.
-- No server, telemetry, text/password history, login item, or global shortcut.
-
-## Install with Homebrew
-
-Apple Silicon Mac, macOS 13 or later:
+Requires **Apple Silicon and macOS 13+**.
 
 ```sh
 brew tap wk-j/tap
@@ -27,59 +20,24 @@ brew install --cask wk-j/tap/image-shelf
 open -a "Image Shelf"
 ```
 
-The release is ad-hoc signed, **not Apple Developer ID signed or notarized**. macOS may block the first launch. Review the source and release before using macOS Privacy & Security → Open Anyway; the installer does not disable Gatekeeper or remove quarantine. Intel Macs must build from source for now. This release has been tested on macOS 27.2, not every supported OS version.
+Upgrade with `brew update && brew upgrade --cask image-shelf`.
 
-Uninstall with `brew uninstall --cask image-shelf`. Your image history is preserved.
+**Not notarized:** macOS may block launch. If you trust the app, use **System Settings → Privacy & Security → Open Anyway**. The installer does not bypass Gatekeeper.
 
-## Run
+To build from source, run `./scripts/bundle.sh`, then open `out/Image Shelf.app`.
 
-```sh
-cargo run --release
-```
+## Usage
 
-Or build a local app bundle with `./scripts/bundle.sh`, then open `out/Image Shelf.app`.
+- Keep the app running to capture copied images.
+- Scroll or use ‹ / › to browse; click a thumbnail to select it.
+- Click + or the counter to expand; − collapses the island.
+- Drag a thumbnail or preview into an app that accepts images/files.
+- Right-click for **Copy image**, **Pause/Resume**, **Open history folder**, or **Quit**.
 
-The app must remain running to collect images. Closing the window quits it. It does not install itself at login. macOS may request clipboard access: allow it if you want capture. Pause capture before copying private images. Concealed/transient clipboard types are skipped, but images are not semantically checked for private information.
+## Storage and limitations
 
-## Storage and limits
+Images stay in `~/Library/Application Support/Image Shelf/images`. Storage is user-private, **not encrypted**. Pause capture before copying sensitive images.
 
-History is private to your user (directory 0700, image files 0600), but **not encrypted**. Location:
+History is limited to **200 images / 512 MB**, with **32 MB / 40 MP per image**. Capture stops when full; existing images are not automatically deleted. Uninstalling preserves history.
 
-`~/Library/Application Support/Image Shelf/images`
-
-Limit: 200 images / 512 MB total; 32 MB / 40 megapixels per image. When full, capture stops with a message, rather than silently deleting old images. Open the folder to manage saved images, then restart the app. Set `IMAGE_SHELF_DIR` for an isolated test history.
-
-## Drag compatibility
-
-The target must accept an image or file drop. Finder supports files; image editors and rich-text apps vary. A plain text field cannot accept an image. Copy image + Cmd-V is the fallback. The app does not promise compatibility with every application.
-
-## Safe demo and checks
-
-```sh
-cargo test
-cargo run --release -- --demo
-cargo run --release -- --demo --snap out/shelf.png --at 1
-```
-
-Demo uses generated images and never reads/writes the system clipboard unless Copy image is explicitly clicked. It never saves demo history. Demo drags offer PNG bytes only because their files do not exist.
-
-Native cross-application drag still requires manual QA on each target application; unit tests check payloads and persistence, not all third-party apps.
-
-## Verified on this Mac
-
-- Release build, `cargo fmt --check`, and `cargo clippy --all-targets -- -D warnings` pass.
-- Unit tests cover PNG validation, persistence, deduplication, private file modes, and drag payloads.
-- `swift scripts/clipboard-smoke.swift` captures a generated PNG through the actual macOS pasteboard into isolated history, verifies exact saved bytes, and restores the previous pasteboard if unchanged. Test passed.
-- Native app window and headless layout inspected. Cross-app mouse drag is implemented via Rune/AppKit, but has **not yet been manually verified in a destination app**.
-
-Alignment regression: render the expanded demo with `--tree out/alignment-tree.json`, then run `python3 scripts/check-alignment.py out/alignment-tree.json`. This checks actual rendered button label centers and shared spacing.
-
-### Thumbnail scrolling
-
-Use a vertical mouse wheel or horizontal/vertical trackpad gesture over the island to browse images. The expanded thumbnail strip glides continuously; the compact image slides as selection changes. Selection and scrolling clamp at the first/last image rather than wrapping. Existing image drag-out and arrow navigation remain available.
-
-Verified: native compact/expanded wheel input, reverse scrolling and both history boundaries; runtime regression checks confirm an intermediate animation frame (not an instant jump), both axes, compact selection, and drag payload safety. Physical trackpad momentum and cross-application drag were not separately exercised in this update.
-
-### Click feedback
-
-Primary clicks create damped water waves that refract the actual app pixels for 1.1 seconds. This uses Rune’s GPU Compositor and effect_backdrop with a WGSL radial-wave shader, following ui-lab’s water approach, not drawn ring outlines. Original per-pixel alpha is preserved even during the effect. Rune-fx Shockwave was reviewed but currently writes opaque replacement pixels, so it is not used here. The effect bends only Image Shelf content, not the macOS desktop behind it. The visual layer does not take input or replace native image drag; at most five waves coexist. Selection uses a short animated underline rather than a frame.
+Drop support depends on the destination app and has not been verified across apps; copying and pasting is the fallback. Water effects distort app content, not the desktop. The island may overlap menu-bar content. No automatic launch at login.

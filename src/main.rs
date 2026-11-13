@@ -1,4 +1,5 @@
 mod store;
+mod water;
 use rune::{
     AppSpec, ClipboardContent, ClipboardImage, Cx, DragItem, El, Image, ImageCache, TextStyle, Tx,
     Waker, el, text,
@@ -13,6 +14,9 @@ struct Entry {
 struct State {
     entries: Vec<Entry>,
     shell: [Image; 2],
+    pointer: [f32; 2],
+    clock: f64,
+    ripples: Vec<([f32; 2], f64)>,
     cache: ImageCache,
     dir: PathBuf,
     selected: usize,
@@ -36,6 +40,9 @@ impl State {
         let mut s = Self {
             entries: vec![],
             shell: notch_surfaces(),
+            pointer: [110., 26.],
+            clock: 0.,
+            ripples: vec![],
             cache: ImageCache::new(Arc::new(|| {})),
             dir,
             selected: 0,
@@ -179,9 +186,15 @@ fn setup(s: &mut State, wake: Waker) {
         }
     });
 }
-fn poll(s: &mut State, _t: f64, tx: &mut Tx) -> bool {
+fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
+    s.clock = t;
+    let animating = !s.ripples.is_empty();
+    s.ripples.retain(|(_, start)| t - start < 1.1);
+    if !s.ripples.is_empty() {
+        tx.wake_after(Duration::from_millis(16));
+    }
     if s.demo || s.paused || s.pending {
-        return false;
+        return animating;
     }
     let (count, private) = pasteboard_state();
     if count != s.change {
@@ -194,7 +207,7 @@ fn poll(s: &mut State, _t: f64, tx: &mut Tx) -> bool {
             });
         }
     }
-    false
+    animating
 }
 fn thumbnail(png: &[u8]) -> Arc<[u8]> {
     if let Ok(img) = image::load_from_memory(png) {
@@ -242,8 +255,8 @@ fn picture(e: &Entry, x: f32, y: f32, w: f32, h: f32) -> El {
                 .pixels(e.image.pixels()),
         )
 }
-const ISLAND_W: f32 = 244.;
-const BODY_W: f32 = 220.;
+const ISLAND_W: f32 = 324.;
+const BODY_W: f32 = 300.;
 const SHOULDER: f32 = 12.;
 const COMPACT_H: f32 = 52.;
 const EXPANDED_H: f32 = 230.;
@@ -262,7 +275,14 @@ fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
     tx.animated();
     true
 }
+fn ripple(s: &mut State) {
+    if s.ripples.len() >= 5 {
+        s.ripples.remove(0);
+    }
+    s.ripples.push((s.pointer, s.clock));
+}
 fn toggle(s: &mut State, tx: &mut Tx) {
+    ripple(s);
     s.expanded = !s.expanded;
     tx.resize_window((ISLAND_W, if s.expanded { EXPANDED_H } else { COMPACT_H }));
 }
@@ -309,9 +329,9 @@ fn notch_surfaces() -> [Image; 2] {
         let r = if h == COMPACT_H { 20. } else { 24. };
         // Concave shoulders flow from the screen edge into the vertical sides.
         // Transparent cutouts are part of the window, never painted with a wallpaper color.
-        let path = format!("M0 0 H244 C237.373 0 232 5.373 232 12 V{} Q232 {} {} {} H{} Q12 {} 12 {} V12 C12 5.373 6.627 0 0 0 Z", h-r, h, 232.-r, h, 12.+r, h, h-r);
-        let svg = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="244" height="{h}" viewBox="0 0 244 {h}"><defs><linearGradient id="g" x2="0" y2="1"><stop stop-color="#090a0d"/><stop offset="1" stop-color="#111319"/></linearGradient></defs><path d="{path}" fill="url(#g)"/></svg>"##);
-        let image = cache.svg(svg.into_bytes(), 244., 2.);
+        let path = format!("M0 0 H324 C317.373 0 312 5.373 312 12 V{} Q312 {} {} {} H{} Q12 {} 12 {} V12 C12 5.373 6.627 0 0 0 Z", h-r, h, 312.-r, h, 12.+r, h, h-r);
+        let svg = format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="324" height="{h}" viewBox="0 0 324 {h}"><defs><linearGradient id="g" x2="0" y2="1"><stop stop-color="#090a0d"/><stop offset="1" stop-color="#111319"/></linearGradient></defs><path d="{path}" fill="url(#g)" fill-opacity="0.62"/></svg>"##);
+        let image = cache.svg(svg.into_bytes(), ISLAND_W, 2.);
         let _ = image.wait();
         image
     })
@@ -319,6 +339,8 @@ fn notch_surfaces() -> [Image; 2] {
 fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut root = el()
         .key("notch")
+        .on_pointer_move(|s: &mut State, p| s.pointer = [p.x - SHOULDER, p.y])
+        .on_press(ripple)
         .on_wheel(wheel)
         .absolute(SHOULDER, 0.)
         .size(BODY_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
@@ -327,7 +349,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         })
         .child(
             el().absolute(56., 10.)
-                .size(64., 32.)
+                .size(144., 32.)
                 .key("notch-header")
                 .on_press_tx(toggle)
                 .center()
@@ -350,17 +372,19 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 )),
         )
         .child(
-            button("‹", 126., 14., 24.)
+            button("‹", 206., 14., 24.)
                 .key("select-previous")
                 .on_press(|s: &mut State| {
+                    ripple(s);
                     s.selected = s.selected.saturating_sub(1);
                     s.scroll = s.selected as f32;
                 }),
         )
         .child(
-            button("›", 154., 14., 24.)
+            button("›", 234., 14., 24.)
                 .key("select-next")
                 .on_press(|s: &mut State| {
+                    ripple(s);
                     if s.selected + 1 < s.entries.len() {
                         s.selected += 1;
                         s.scroll = s.selected as f32;
@@ -368,7 +392,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 }),
         )
         .child(
-            button(if s.expanded { "−" } else { "+" }, 182., 14., 24.)
+            button(if s.expanded { "−" } else { "+" }, 262., 14., 24.)
                 .key("expand")
                 .on_press_tx(toggle),
         );
@@ -380,7 +404,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .fill(c(if s.paused { 0xe3ac68 } else { 0x8ce6d4 })),
     );
     if s.expanded {
-        root = root.child(el().absolute(10., 51.).size(200., 0.5).linear_gradient(
+        root = root.child(el().absolute(10., 51.).size(280., 0.5).linear_gradient(
             0.,
             [(0., c(0x15171d)), (0.5, c(0x353b48)), (1., c(0x15171d))],
         ));
@@ -395,6 +419,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             compact = compact.child(
                 picture(e, (i as f32 - s.selected as f32) * 42., 0., 36., 32.)
                     .key(format!("compact-image-{i}"))
+                    .on_press(ripple)
                     .hit()
                     .cursor(rune::Cursor::Grab)
                     .drag_out(move |s: &State| s.drag(i))
@@ -406,10 +431,10 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         root = root.child(label("▧", 20., 0x777777).absolute(17., 13.));
     }
     if s.expanded {
-        let offset = (s.scroll * 69.).min((s.entries.len() as f32 * 69. - 207.).max(0.));
+        let offset = (s.scroll * 69.).min((s.entries.len() as f32 * 69. - 287.).max(0.));
         let mut strip = el()
             .absolute(10., 60.)
-            .size(200., 44.)
+            .size(280., 49.)
             .clip_rounded(0.)
             .key("thumbnail-strip");
         for (i, e) in s.entries.iter().enumerate() {
@@ -418,8 +443,9 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .key(format!("image-{i}"))
                     .hit()
                     .cursor(rune::Cursor::Grab)
-                    .border(if i == s.selected { 1. } else { 0. }, c(0x8ce6d4))
+                    .opacity(if i == s.selected { 1. } else { 0.65 })
                     .on_press(move |s: &mut State| {
+                        ripple(s);
                         s.selected = i;
                         s.scroll = i as f32;
                     })
@@ -427,11 +453,21 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                     .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}")),
             );
         }
+        if !s.entries.is_empty() {
+            strip = strip.child(
+                el().absolute(s.selected as f32 * 69. - offset + 22., 47.)
+                    .size(18., 2.)
+                    .radius(1.)
+                    .fill(c(0x9ee8d9))
+                    .key("selection-marker"),
+            );
+        }
         root = root.child(strip);
         if let Some(e) = s.entries.get(s.selected) {
             root = root.child(
-                picture(e, 10., 112., 200., 110.)
+                picture(e, 10., 112., 280., 110.)
                     .key("preview")
+                    .on_press(ripple)
                     .border(0.6, c(0x353944))
                     .hit()
                     .cursor(rune::Cursor::Grab)
@@ -448,13 +484,25 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .pixels(s.shell[usize::from(s.expanded)].pixels()),
         )
         .child(root)
+        .child(
+            rune::effect(77)
+                .absolute(0., 0.)
+                .size(ISLAND_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
+                .effect_backdrop(true),
+        )
 }
 fn main() {
     rune::App::new(AppSpec {
         setup: Some(setup),
         poll: Some(poll),
         min_size: Some((ISLAND_W, COMPACT_H)),
-        scenes: &[("expanded", |s| s.expanded = true)],
+        scenes: &[
+            ("expanded", |s| s.expanded = true),
+            ("water", |s| {
+                s.expanded = true;
+                s.ripples.push(([110., 155.], 0.));
+            }),
+        ],
         ..AppSpec::new("Image Shelf", (ISLAND_W, COMPACT_H), State::new, view)
     })
     .window_options(rune::WindowOptions {
@@ -482,6 +530,7 @@ fn main() {
             },
         )
     })
+    .compositor(water::Water::default())
     .run();
 }
 
@@ -493,6 +542,9 @@ mod tests {
         let mut s = State {
             entries: vec![],
             shell: notch_surfaces(),
+            pointer: [110., 26.],
+            clock: 0.,
+            ripples: vec![],
             cache: ImageCache::new(Arc::new(|| {})),
             dir: PathBuf::new(),
             selected: 0,
@@ -505,7 +557,7 @@ mod tests {
             demo: true,
         };
         s.fixtures();
-        let mut rt = rune::Runtime::new(s, view, (244., 230.), rune::Env::new(true, 1.));
+        let mut rt = rune::Runtime::new(s, view, (324., 230.), rune::Env::new(true, 1.));
         rt.state.expanded = true;
         rt.frame(0.);
         rt.wheel_xy(30., 80., 0., -48.);
@@ -534,6 +586,17 @@ mod tests {
         rt.wheel_xy(30., 20., 0., -48.);
         rt.frame(1. / 60.);
         assert_eq!(rt.state.selected, 1);
+        rt.pointer_move(258., 26.);
+        rt.pointer_down(258., 26.);
+        rt.pointer_up(258., 26.);
+        rt.frame(1. / 60.);
+        assert_eq!(rt.state.selected, 2, "ripple must not block navigation");
+        assert_eq!(rt.state.ripples.len(), 1);
+        assert_eq!(rt.state.ripples[0].0, [246., 26.]);
+        for _ in 0..10 {
+            ripple(&mut rt.state);
+        }
+        assert_eq!(rt.state.ripples.len(), 5, "bounded transient effects");
         let mut s = rt.state;
         let item = s.drag(0).unwrap();
         assert!(item.png_data().is_some());

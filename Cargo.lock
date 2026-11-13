@@ -1251,13 +1251,14 @@ dependencies = [
 
 [[package]]
 name = "image-shelf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blake3",
  "image",
  "objc2 0.5.3",
  "objc2-foundation 0.2.2",
  "rune",
+ "wgpu",
 ]
 
 [[package]]

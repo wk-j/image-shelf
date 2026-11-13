@@ -4,7 +4,7 @@ A macOS image clipboard shelf built with Rust + [Rune](https://github.com/anomal
 
 ## Minimal Dynamic Notch
 
-A dark notch with a **220 × 52 pt** content area attaches to the top center of the primary display. Only the selected image, counter, previous/next and expand controls remain visible. Drag the image into another application. Click the counter or + to expand to **220 × 230 pt**, showing nearby thumbnails and a preview; − collapses it. The reference-style concave upper shoulders add 12 pt on each side (244 pt total window width). The outer cutouts and lower rounded corners are genuinely transparent, not painted to match a wallpaper.
+A dark notch with a **300 × 52 pt** content area attaches to the top center of the primary display. Only the selected image, counter, previous/next and expand controls remain visible. Drag the image into another application. Click the counter or + to expand to **300 × 230 pt**, showing nearby thumbnails and a preview; − collapses it. The reference-style concave upper shoulders add 12 pt on each side (324 pt total window width). The outer cutouts and lower rounded corners are genuinely transparent, not painted to match a wallpaper. The dark island surface itself is translucent (62% opacity); images and controls remain legible and opaque.
 
 **Right-click anywhere on the island** for Copy image, Pause/Resume capture, Open history folder and Quit. All secondary actions remain available without consuming permanent screen space. The context menu also shows the latest operation/error status.
 
@@ -79,3 +79,7 @@ Alignment regression: render the expanded demo with `--tree out/alignment-tree.j
 Use a vertical mouse wheel or horizontal/vertical trackpad gesture over the island to browse images. The expanded thumbnail strip glides continuously; the compact image slides as selection changes. Selection and scrolling clamp at the first/last image rather than wrapping. Existing image drag-out and arrow navigation remain available.
 
 Verified: native compact/expanded wheel input, reverse scrolling and both history boundaries; runtime regression checks confirm an intermediate animation frame (not an instant jump), both axes, compact selection, and drag payload safety. Physical trackpad momentum and cross-application drag were not separately exercised in this update.
+
+### Click feedback
+
+Primary clicks create damped water waves that refract the actual app pixels for 1.1 seconds. This uses Rune’s GPU Compositor and effect_backdrop with a WGSL radial-wave shader, following ui-lab’s water approach, not drawn ring outlines. Original per-pixel alpha is preserved even during the effect. Rune-fx Shockwave was reviewed but currently writes opaque replacement pixels, so it is not used here. The effect bends only Image Shelf content, not the macOS desktop behind it. The visual layer does not take input or replace native image drag; at most five waves coexist. Selection uses a short animated underline rather than a frame.

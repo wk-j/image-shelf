@@ -21,8 +21,8 @@ struct Uniforms { viewport: vec4f, taps: array<vec4f, 5>, clips: array<vec4f, 5>
         let tap = u.taps[i];
         let clip = u.clips[i];
         if p.x < clip.x || p.y < clip.y || p.x >= clip.x+clip.z || p.y >= clip.y+clip.w { continue; }
-        // Speed up the entire wave clock, preserving crest spacing and damping.
-        let age = tap.z * (1.1 / 0.4);
+        // Spread the same crest motion and damping over 0.8 seconds for a softer wave.
+        let age = tap.z * (1.1 / 0.8);
         if tap.w == 0. || age < 0. || age > 1.1 { continue; }
         affected = true;
         clip_min = clip.xy + vec2f(0.5 / u.viewport.z);

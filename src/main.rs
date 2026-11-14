@@ -307,7 +307,7 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         tx.wake_after(Duration::from_millis(16));
     }
     let animating = loaded || edge_changed || !s.ripples.is_empty();
-    s.ripples.retain(|(_, start, _)| t - start < 0.4);
+    s.ripples.retain(|(_, start, _)| t - start < 0.8);
     if !s.ripples.is_empty() {
         tx.wake_after(Duration::from_millis(16));
     }

@@ -20,7 +20,7 @@ impl Gpu {
         });
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water taps"),
-            size: 96,
+            size: 176,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -130,7 +130,7 @@ impl Compositor<State> for Water {
         let gpu = self.gpu.as_mut().unwrap();
         let mut values = vec![f.size.0 as f32, f.size.1 as f32, f.rt.env.scale, 0.];
         for i in 0..5 {
-            if let Some((p, t)) = f.rt.state.ripples.get(i) {
+            if let Some((p, t, _)) = f.rt.state.ripples.get(i) {
                 values.extend([
                     p[0] + if matches!(
                         f.rt.state.dock.edge,
@@ -147,6 +147,9 @@ impl Compositor<State> for Water {
             } else {
                 values.extend([0.; 4]);
             }
+        }
+        for i in 0..5 {
+            values.extend(f.rt.state.ripples.get(i).map_or([0.; 4], |r| r.2));
         }
         let bytes: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
         f.write_buffer(&gpu.uniform, 0, &bytes);

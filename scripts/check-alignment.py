@@ -1,6 +1,7 @@
 """Assert rendered Rune layout, not hand-maintained coordinate constants."""
 import json, sys
-root=json.load(open(sys.argv[1]))['accessibility']
+tree=json.load(open(sys.argv[1]))
+root=tree['accessibility']
 def walk(n):
     yield n
     for c in n.get('children',[]): yield from walk(c)
@@ -8,7 +9,10 @@ nodes={n.get('key'):n for n in walk(root) if n.get('key')}
 keys=['select-previous','select-next','expand']
 for key in keys:
     n=nodes[key]; x,y,w,h=n['bounds']
-    label=n['children'][0]; lx,ly,lw,lh=label['bounds']
+    icon=next(e for e in tree['elements'] if e['path'].endswith(f'/{key}/#0') and e['role']=='icon')
+    lx,ly,lw,lh=icon['rect']
+    assert lw==lh==14,(key,'icon size')
+    assert n.get('name'),(key,'accessible name')
     assert abs((lx+lw/2)-(x+w/2))<0.6,(key,'horizontal')
     assert abs((ly+lh/2)-(y+h/2))<0.6,(key,'vertical')
 for a,b in zip(keys[:2],keys[1:3]):

@@ -41,6 +41,6 @@ Images stay in `~/Library/Application Support/Image Shelf/images`. Storage is us
 
 History is limited to **200 images / 512 MB**, with **32 MB / 40 MP per image**. Capture stops when full; existing images are not automatically deleted. Uninstalling preserves history.
 
-Drop support depends on the destination app and has not been verified across apps; copying and pasting is the fallback. Water effects distort app content, not the desktop. The island may overlap menu-bar content. No automatic launch at login.
+Drop support depends on the destination app and has not been verified across apps; copying and pasting is the fallback. Water effects are limited to the thumbnail area; previews and controls stay still. The island may overlap menu-bar content. No automatic launch at login.
 
 Native multi-monitor dragging has not been verified. Side docks can overlap a macOS Dock placed on the same edge.

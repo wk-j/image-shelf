@@ -123,6 +123,14 @@ mod native {
             first
         }
     }
+    // Side docks stay shadowless: a window-server shadow traced from the
+    // translucent shape smears its edge.
+    unsafe fn shadow(w: *mut AnyObject, edge: Edge) {
+        unsafe {
+            let on = !matches!(edge, Edge::Left | Edge::Right);
+            let _: () = msg_send![w, setHasShadow: objc2::runtime::Bool::new(on)];
+        }
+    }
     unsafe fn move_to(w: *mut AnyObject, r: Rect) {
         unsafe {
             let _: () = msg_send![w,setFrameOrigin:NSPoint::new(r.x.round(),r.y.round())];
@@ -142,6 +150,7 @@ mod native {
             if let Some((screen, visible)) = screens((r.x + r.w / 2., r.y + r.h / 2.)) {
                 dock.edge = edge;
                 dock.anchor = Some((screen, visible));
+                shadow(w, edge);
                 let r = snapped(r, screen, visible, edge);
                 move_to(w, r);
                 dock.last_frame = Some(r);
@@ -174,6 +183,7 @@ mod native {
                 if let Some((screen, visible)) = screens((r.x + r.w / 2., r.y + r.h / 2.)) {
                     dock.edge = target(r, screen, visible, (p.x, p.y));
                     dock.anchor = Some((screen, visible));
+                    shadow(w, dock.edge);
                 }
             }
             if (moved || resizing || settled || initialized)

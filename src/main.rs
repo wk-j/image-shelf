@@ -43,13 +43,13 @@ impl Thumbs {
             let (queue, finished, wake) = (queue.clone(), finished.clone(), wake.clone());
             std::thread::spawn(move || {
                 loop {
-                    let Ok((path, decoded)) = queue.lock().unwrap_or_else(|e| e.into_inner()).recv()
+                    let Ok((path, decoded)) =
+                        queue.lock().unwrap_or_else(|e| e.into_inner()).recv()
                     else {
                         return;
                     };
-                    let decoded = decoded.or_else(|| {
-                        image::load_from_memory(&std::fs::read(&path).ok()?).ok()
-                    });
+                    let decoded = decoded
+                        .or_else(|| image::load_from_memory(&std::fs::read(&path).ok()?).ok());
                     if let Some(img) = decoded {
                         if finished.send((path, thumbnail(&img))).is_err() {
                             return;
@@ -80,7 +80,7 @@ struct State {
     side_shell: [Image; 4],
     pointer: [f32; 2],
     clock: f64,
-    ripples: Vec<([f32; 2], f64)>,
+    ripples: Vec<([f32; 2], f64, [f32; 4])>,
     cache: ImageCache,
     thumbs: Option<Thumbs>,
     dir: PathBuf,
@@ -307,7 +307,7 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         tx.wake_after(Duration::from_millis(16));
     }
     let animating = loaded || edge_changed || !s.ripples.is_empty();
-    s.ripples.retain(|(_, start)| t - start < 0.4);
+    s.ripples.retain(|(_, start, _)| t - start < 0.4);
     if !s.ripples.is_empty() {
         tx.wake_after(Duration::from_millis(16));
     }
@@ -335,7 +335,28 @@ fn label(v: impl AsRef<str>, size: f32, color: u32) -> El {
         .font(TextStyle::new(size, 400.))
         .color(c(color))
 }
-fn button(v: &str, x: f32, y: f32, w: f32) -> El {
+// One stroked icon set so every button glyph shares weight, size and optical centre.
+// Text glyphs (↑ ‹ + −) come from different fallback fonts and never match.
+macro_rules! glyph {
+    ($name:ident, $id:literal, $d:literal) => {
+        static $name: rune::Icon = rune::Icon {
+            name: $id,
+            view: 16.,
+            body: concat!(
+                r#"<path d=""#,
+                $d,
+                r#"" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#
+            ),
+        };
+    };
+}
+glyph!(UP, "shelf-up", "M4.5 10L8 6.5L11.5 10");
+glyph!(DOWN, "shelf-down", "M4.5 6.5L8 10L11.5 6.5");
+glyph!(LEFT, "shelf-left", "M9.5 4.5L6 8L9.5 11.5");
+glyph!(RIGHT, "shelf-right", "M6.5 4.5L10 8L6.5 11.5");
+glyph!(PLUS, "shelf-plus", "M8 4.5V11.5M4.5 8H11.5");
+glyph!(MINUS, "shelf-minus", "M4.5 8H11.5");
+fn button(icon: &'static rune::Icon, x: f32, y: f32, w: f32) -> El {
     el().absolute(x, y)
         .size(w, 24.)
         .radius(8.)
@@ -343,8 +364,14 @@ fn button(v: &str, x: f32, y: f32, w: f32) -> El {
         .border(0.5, c(0x373a44))
         .hit()
         .cursor(rune::Cursor::Pointer)
+        .label(match icon.name {
+            "shelf-up" | "shelf-left" => "Previous image",
+            "shelf-down" | "shelf-right" => "Next image",
+            "shelf-plus" => "Expand",
+            _ => "Collapse",
+        })
         .center()
-        .child(label(v, 13., 0xe3e9f2))
+        .child(rune::icon(icon, 14.).color(c(0xe3e9f2)))
 }
 fn picture(e: &Entry, x: f32, y: f32, w: f32, h: f32) -> El {
     let ratio = (w / e.size.0 as f32).min(h / e.size.1 as f32);
@@ -430,14 +457,46 @@ fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
     tx.animated();
     true
 }
+// Coordinates are in window points. Only the thumbnail viewport may refract;
+// previews, buttons, headers and transparent window hosting space are excluded.
+fn thumbnail_area(s: &State) -> Option<[f32; 4]> {
+    if s.entries.is_empty() {
+        return None;
+    }
+    let side = matches!(s.dock.edge, docking::Edge::Left | docking::Edge::Right);
+    let p = [
+        s.pointer[0] + if side { 0. } else { SHOULDER },
+        s.pointer[1],
+    ];
+    let areas = if side {
+        let rail = if s.dock.edge == docking::Edge::Right {
+            shelf_size(s).0 - 76.
+        } else {
+            0.
+        };
+        vec![[rail + 10., 34., 56., 280.]]
+    } else {
+        let mut areas = vec![[SHOULDER + 10., 10., 36., 32.]];
+        if s.expanded {
+            areas.push([SHOULDER + 10., 60., 280., 44.]);
+        }
+        areas
+    };
+    areas
+        .into_iter()
+        .find(|r| p[0] >= r[0] && p[0] < r[0] + r[2] && p[1] >= r[1] && p[1] < r[1] + r[3])
+}
 fn ripple(s: &mut State) {
+    let Some(area) = thumbnail_area(s) else {
+        return;
+    };
     if s.ripples.len() >= 5 {
         s.ripples.remove(0);
     }
-    s.ripples.push((s.pointer, s.clock));
+    s.ripples.push((s.pointer, s.clock, area));
 }
 fn toggle(s: &mut State, tx: &mut Tx) {
-    ripple(s);
+    s.ripples.clear();
     s.expanded = !s.expanded;
     tx.resize_window(shelf_size(s));
     tx.wake_after(Duration::from_millis(16));
@@ -514,6 +573,7 @@ fn shelf_size(s: &State) -> (f32, f32) {
     }
 }
 fn set_edge(s: &mut State, edge: docking::Edge, tx: &mut Tx) {
+    s.ripples.clear();
     docking::place(&mut s.dock, edge);
     tx.resize_window(shelf_size(s));
     tx.wake_after(Duration::from_millis(16));
@@ -526,9 +586,9 @@ fn side_view(s: &State) -> El {
         .key("side-dock")
         .size(w, h)
         .on_pointer_move(|s: &mut State, p| s.pointer = [p.x, p.y])
-        .on_press(ripple)
         .on_wheel(wheel)
         .on_secondary_press(|s: &mut State, press: rune::PointerPress, tx| {
+            s.ripples.clear();
             // AppKit clips a panel-attached menu to the narrow host on macOS 26.
             // Temporarily open the inward preview so the menu has readable width;
             // menu_action restores the compact rail on selection or cancellation.
@@ -557,19 +617,17 @@ fn side_view(s: &State) -> El {
                 .child(el().size(22., 3.).radius(1.5).fill(c(0x777d89))),
         )
         .child(
-            button("↑", rail + 6., 320., 20.)
+            button(&UP, rail + 6., 320., 20.)
                 .key("select-previous")
                 .on_press(|s: &mut State| {
-                    ripple(s);
                     s.selected = s.selected.saturating_sub(1);
                     s.scroll = s.selected as f32;
                 }),
         )
         .child(
-            button("↓", rail + 28., 320., 20.)
+            button(&DOWN, rail + 28., 320., 20.)
                 .key("select-next")
                 .on_press(|s: &mut State| {
-                    ripple(s);
                     if s.selected + 1 < s.entries.len() {
                         s.selected += 1;
                         s.scroll = s.selected as f32;
@@ -577,9 +635,14 @@ fn side_view(s: &State) -> El {
                 }),
         )
         .child(
-            button(if s.expanded { "−" } else { "+" }, rail + 50., 320., 20.)
-                .key("expand")
-                .on_press_tx(toggle),
+            button(
+                if s.expanded { &MINUS } else { &PLUS },
+                rail + 50.,
+                320.,
+                20.,
+            )
+            .key("expand")
+            .on_press_tx(toggle),
         );
     let mut strip = el()
         .key("thumbnail-strip")
@@ -642,16 +705,13 @@ fn side_surfaces() -> [Image; 4] {
     std::array::from_fn(|i| {
         let w = if i % 2 == 0 { 76. } else { 330. };
         let r = if i % 2 == 0 { 20. } else { 24. };
-        // Rotate the top island's concave shoulders onto the attached screen edge.
-        // Keep the upper/lower cutouts transparent; the inward corners stay convex.
+        // Flush against the screen edge with square corners there; only the inward corners
+        // round. Concave shoulders read as stray tabs against wallpaper, unlike the menu bar.
         let path = format!(
-            "M0 0 C0 6.627 5.373 12 12 12 H{} Q{} 12 {} {} V{} Q{} 348 {} 348 H12 C5.373 348 0 353.373 0 360 Z",
+            "M0 12 H{} Q{w} 12 {w} {} V{} Q{w} 348 {} 348 H0 Z",
             w - r,
-            w,
-            w,
             12. + r,
             348. - r,
-            w,
             w - r
         );
         let transform = if i >= 2 {
@@ -662,7 +722,10 @@ fn side_surfaces() -> [Image; 4] {
         let svg = format!(
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="360"><defs><linearGradient id="g"><stop stop-color="#090a0d"/><stop offset="1" stop-color="#111319"/></linearGradient></defs><path transform="{transform}" d="{path}" fill="url(#g)" fill-opacity="0.62"/></svg>"##
         );
-        let image = cache.svg(svg.into_bytes(), w, 2.);
+        // svg() fits the drawing into a size_pt square, so pass the longest side (the 360pt
+        // height). Passing the width rasterized the rail at 32px wide and stretched it ~5x,
+        // which smeared its edges into a pale band.
+        let image = cache.svg(svg.into_bytes(), 360., 2.);
         let _ = image.wait();
         image
     })
@@ -687,11 +750,11 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     let mut root = el()
         .key("notch")
         .on_pointer_move(|s: &mut State, p| s.pointer = [p.x - SHOULDER, p.y])
-        .on_press(ripple)
         .on_wheel(wheel)
         .absolute(SHOULDER, 0.)
         .size(BODY_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
         .on_secondary_press(|s: &mut State, press: rune::PointerPress, tx| {
+            s.ripples.clear();
             // Reserve transparent space below the island before showing AppKit's
             // view-attached menu; otherwise a 52pt panel clips all menu rows.
             s.menu_host = true;
@@ -727,19 +790,17 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 )),
         )
         .child(
-            button("‹", 206., 14., 24.)
+            button(&LEFT, 206., 14., 24.)
                 .key("select-previous")
                 .on_press(|s: &mut State| {
-                    ripple(s);
                     s.selected = s.selected.saturating_sub(1);
                     s.scroll = s.selected as f32;
                 }),
         )
         .child(
-            button("›", 234., 14., 24.)
+            button(&RIGHT, 234., 14., 24.)
                 .key("select-next")
                 .on_press(|s: &mut State| {
-                    ripple(s);
                     if s.selected + 1 < s.entries.len() {
                         s.selected += 1;
                         s.scroll = s.selected as f32;
@@ -747,7 +808,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 }),
         )
         .child(
-            button(if s.expanded { "−" } else { "+" }, 262., 14., 24.)
+            button(if s.expanded { &MINUS } else { &PLUS }, 262., 14., 24.)
                 .key("expand")
                 .on_press_tx(toggle),
         );
@@ -824,7 +885,6 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             root = root.child(
                 picture(e, 10., 112., 280., 110.)
                     .key("preview")
-                    .on_press(ripple)
                     .border(0.6, c(0x353944))
                     .hit()
                     .cursor(rune::Cursor::Grab)
@@ -867,7 +927,8 @@ fn main() {
             }),
             ("water", |s| {
                 s.expanded = true;
-                s.ripples.push(([110., 155.], 0.));
+                s.pointer = [40., 80.];
+                ripple(s);
             }),
         ],
         ..AppSpec::new("Image Shelf", (ISLAND_W, COMPACT_H), State::new, view)
@@ -905,6 +966,87 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shells_rasterize_at_full_2x_resolution() {
+        for (i, image) in side_surfaces().iter().enumerate() {
+            let w = if i % 2 == 0 { 152 } else { 660 };
+            assert_eq!(image.wait().unwrap(), [w, 720], "side shell {i}");
+        }
+        for (image, h) in notch_surfaces().iter().zip([104, 460]) {
+            assert_eq!(image.wait().unwrap(), [648, h]);
+        }
+    }
+    #[test]
+    fn water_is_thumbnail_only_in_every_layout() {
+        for edge in [
+            docking::Edge::Top,
+            docking::Edge::Left,
+            docking::Edge::Right,
+        ] {
+            for expanded in [false, true] {
+                let mut s = State::new();
+                s.demo = true;
+                s.fixtures();
+                s.dock.edge = edge;
+                s.expanded = expanded;
+                let size = shelf_size(&s);
+                let mut rt = rune::Runtime::new(s, view, size, rune::Env::new(true, 1.));
+                rt.frame(0.);
+                let side = edge != docking::Edge::Top;
+                let rail = if edge == docking::Edge::Right {
+                    size.0 - 76.
+                } else {
+                    0.
+                };
+                let (x, y) = if side { (rail + 35., 60.) } else { (35., 25.) };
+                rt.pointer_move(x, y);
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+                rt.frame(0.016);
+                assert_eq!(rt.state.ripples.len(), 1, "thumbnail {edge:?}/{expanded}");
+                let area = rt.state.ripples[0].2;
+                assert!(
+                    x >= area[0] && x < area[0] + area[2] && y >= area[1] && y < area[1] + area[3]
+                );
+                rt.state.ripples.clear();
+                let (x, y) = if side {
+                    (rail + 38., 330.)
+                } else {
+                    (258., 26.)
+                };
+                rt.pointer_move(x, y);
+                rt.pointer_down(x, y);
+                rt.pointer_up(x, y);
+                rt.frame(0.016);
+                assert!(
+                    rt.state.ripples.is_empty(),
+                    "navigation {edge:?}/{expanded}"
+                );
+                if expanded {
+                    let (x, y) = if side {
+                        (
+                            if edge == docking::Edge::Right {
+                                120.
+                            } else {
+                                180.
+                            },
+                            160.,
+                        )
+                    } else {
+                        (150., 160.)
+                    };
+                    rt.pointer_move(x, y);
+                    rt.pointer_down(x, y);
+                    rt.pointer_up(x, y);
+                    rt.frame(0.016);
+                    assert!(rt.state.ripples.is_empty(), "preview {edge:?}");
+                }
+                rt.state.pointer = if side { [rail + 30., 20.] } else { [110., 26.] };
+                ripple(&mut rt.state);
+                assert!(rt.state.ripples.is_empty(), "header {edge:?}");
+            }
+        }
+    }
     #[test]
     fn demo_drag_has_png_and_never_fake_file() {
         let mut s = State {
@@ -981,8 +1123,11 @@ mod tests {
         rt.pointer_up(258., 26.);
         rt.frame(1. / 60.);
         assert_eq!(rt.state.selected, 2, "ripple must not block navigation");
-        assert_eq!(rt.state.ripples.len(), 1);
-        assert_eq!(rt.state.ripples[0].0, [246., 26.]);
+        assert!(
+            rt.state.ripples.is_empty(),
+            "navigation must not trigger water"
+        );
+        rt.state.pointer = [20., 20.];
         for _ in 0..10 {
             ripple(&mut rt.state);
         }

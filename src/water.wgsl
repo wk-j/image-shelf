@@ -1,5 +1,5 @@
 // Rune backdrop refraction: damped radial water waves, not painted circles.
-struct Uniforms { viewport: vec4f, taps: array<vec4f, 5> }
+struct Uniforms { viewport: vec4f, taps: array<vec4f, 5>, clips: array<vec4f, 5> }
 @group(0) @binding(0) var<uniform> u: Uniforms;
 @group(0) @binding(1) var backdrop: texture_2d<f32>;
 @group(0) @binding(2) var linear_sampler: sampler;
@@ -14,11 +14,19 @@ struct Uniforms { viewport: vec4f, taps: array<vec4f, 5> }
     if original.a < 0.001 { return original; }
     var bend = vec2f(0.);
     var light = 0.;
+    var clip_min = vec2f(0.);
+    var clip_max = u.viewport.xy / u.viewport.z;
+    var affected = false;
     for(var i=0u; i<5u; i++) {
         let tap = u.taps[i];
+        let clip = u.clips[i];
+        if p.x < clip.x || p.y < clip.y || p.x >= clip.x+clip.z || p.y >= clip.y+clip.w { continue; }
         // Speed up the entire wave clock, preserving crest spacing and damping.
         let age = tap.z * (1.1 / 0.4);
         if tap.w == 0. || age < 0. || age > 1.1 { continue; }
+        affected = true;
+        clip_min = clip.xy + vec2f(0.5 / u.viewport.z);
+        clip_max = clip.xy + clip.zw - vec2f(0.5 / u.viewport.z);
         let delta = p - tap.xy;
         let distance = length(delta);
         let front = distance - age * 145.;
@@ -28,8 +36,9 @@ struct Uniforms { viewport: vec4f, taps: array<vec4f, 5> }
         bend += delta / max(distance,1.) * slope * 5.5;
         light += slope * 0.025;
     }
+    if !affected { return original; }
     let shifted = textureSampleLevel(backdrop, linear_sampler,
-        clamp(uv + bend * u.viewport.z / u.viewport.xy, vec2f(0.),vec2f(1.)), 0.);
+        clamp(p + bend, clip_min, clip_max) * u.viewport.z / u.viewport.xy, 0.);
     let color = shifted.rgb / max(shifted.a, 0.001);
     return vec4f(max(color + light,vec3f(0.)) * original.a, original.a);
 }

@@ -132,7 +132,14 @@ impl Compositor<State> for Water {
         for i in 0..5 {
             if let Some((p, t)) = f.rt.state.ripples.get(i) {
                 values.extend([
-                    p[0] + crate::SHOULDER,
+                    p[0] + if matches!(
+                        f.rt.state.dock.edge,
+                        crate::docking::Edge::Left | crate::docking::Edge::Right
+                    ) {
+                        0.
+                    } else {
+                        crate::SHOULDER
+                    },
                     p[1],
                     (f.rt.state.clock - t) as f32,
                     1.,

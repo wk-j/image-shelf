@@ -1,3 +1,4 @@
+mod docking;
 mod store;
 mod water;
 use rune::{
@@ -12,6 +13,7 @@ struct Entry {
     size: (u32, u32),
 }
 struct State {
+    dock: docking::Dock,
     entries: Vec<Entry>,
     shell: [Image; 2],
     pointer: [f32; 2],
@@ -27,6 +29,9 @@ struct State {
     expanded: bool,
     paused: bool,
     pending: bool,
+    menu_restore_compact: bool,
+    menu_host: bool,
+    menu_at: Option<(f64, f32, f32)>,
     change: isize,
     status: String,
     demo: bool,
@@ -41,6 +46,7 @@ impl State {
                     .join("Library/Application Support/Image Shelf/images")
             });
         let mut s = Self {
+            dock: docking::Dock::default(),
             entries: vec![],
             shell: notch_surfaces(),
             pointer: [110., 26.],
@@ -56,6 +62,9 @@ impl State {
             expanded: false,
             paused: std::env::args().any(|a| a == "--paused"),
             pending: false,
+            menu_restore_compact: false,
+            menu_host: false,
+            menu_at: None,
             change: -1,
             status: "Copy an image to start your shelf".into(),
             demo,
@@ -194,8 +203,24 @@ fn setup(s: &mut State, wake: Waker) {
 }
 fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
     s.clock = t;
-    let animating = !s.ripples.is_empty();
-    s.ripples.retain(|(_, start)| t - start < 0.65);
+    if let Some((due, x, y)) = s.menu_at {
+        if t >= due {
+            s.menu_at = None;
+            tx.popup_menu(menu(s), (x, y), menu_action);
+        } else {
+            tx.wake_after(Duration::from_millis(30));
+        }
+    }
+    let old_edge = s.dock.edge;
+    if docking::tick(&mut s.dock) {
+        tx.wake_after(Duration::from_millis(16));
+    }
+    let edge_changed = old_edge != s.dock.edge;
+    if edge_changed {
+        tx.resize_window(shelf_size(s));
+    }
+    let animating = edge_changed || !s.ripples.is_empty();
+    s.ripples.retain(|(_, start)| t - start < 0.4);
     if !s.ripples.is_empty() {
         tx.wake_after(Duration::from_millis(16));
     }
@@ -330,7 +355,7 @@ fn ripple(s: &mut State) {
 fn toggle(s: &mut State, tx: &mut Tx) {
     ripple(s);
     s.expanded = !s.expanded;
-    tx.resize_window((ISLAND_W, if s.expanded { EXPANDED_H } else { COMPACT_H }));
+    tx.resize_window(shelf_size(s));
 }
 fn menu(s: &State) -> rune::PopupMenu {
     rune::PopupMenu::new()
@@ -345,11 +370,24 @@ fn menu(s: &State) -> rune::PopupMenu {
         ))
         .item(rune::PopupItem::new("folder", "Open history folder"))
         .separator()
+        .item(rune::PopupItem::new("snap-left", "Snap left"))
+        .item(rune::PopupItem::new("snap-right", "Snap right"))
+        .item(rune::PopupItem::new("snap-top", "Return to top"))
+        .separator()
         .item(rune::PopupItem::new("status", &s.status).enabled(false))
         .separator()
         .item(rune::PopupItem::new("quit", "Quit Image Shelf"))
 }
 fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
+    if s.menu_host {
+        s.menu_host = false;
+        tx.resize_window(shelf_size(s));
+    }
+    if s.menu_restore_compact {
+        s.menu_restore_compact = false;
+        s.expanded = false;
+        tx.resize_window(shelf_size(s));
+    }
     match picked {
         Some("copy") => {
             if let Some(e) = s.entries.get(s.selected)
@@ -365,9 +403,126 @@ fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
                 let _ = std::process::Command::new("open").arg(&s.dir).spawn();
             }
         }
+        Some("snap-left") => set_edge(s, docking::Edge::Left, tx),
+        Some("snap-right") => set_edge(s, docking::Edge::Right, tx),
+        Some("snap-top") => set_edge(s, docking::Edge::Top, tx),
         Some("quit") => tx.quit(),
         _ => {}
     }
+}
+fn shelf_size(s: &State) -> (f32, f32) {
+    if matches!(s.dock.edge, docking::Edge::Left | docking::Edge::Right) {
+        (if s.expanded { 330. } else { 76. }, 360.)
+    } else {
+        (
+            ISLAND_W,
+            if s.menu_host {
+                400.
+            } else if s.expanded {
+                EXPANDED_H
+            } else {
+                COMPACT_H
+            },
+        )
+    }
+}
+fn set_edge(s: &mut State, edge: docking::Edge, tx: &mut Tx) {
+    docking::place(&mut s.dock, edge);
+    tx.resize_window(shelf_size(s));
+}
+fn side_view(s: &State) -> El {
+    let (w, h) = shelf_size(s);
+    let right = s.dock.edge == docking::Edge::Right;
+    let rail = if right { w - 76. } else { 0. };
+    let mut root = el()
+        .key("side-dock")
+        .size(w, h)
+        .clip_rounded(18.)
+        .fill(c(0x090a0e).alpha(0.72))
+        .on_pointer_move(|s: &mut State, p| s.pointer = [p.x, p.y])
+        .on_press(ripple)
+        .on_wheel(wheel)
+        .on_secondary_press(|s: &mut State, press: rune::PointerPress, tx| {
+            // AppKit clips a panel-attached menu to the narrow host on macOS 26.
+            // Temporarily open the inward preview so the menu has readable width;
+            // menu_action restores the compact rail on selection or cancellation.
+            if !s.expanded {
+                s.menu_restore_compact = true;
+                s.expanded = true;
+                tx.resize_window(shelf_size(s));
+            }
+            let x = if s.dock.edge == docking::Edge::Left {
+                86.
+            } else {
+                10.
+            };
+            s.menu_at = Some((s.clock + 0.12, x, press.y.min(80.)));
+            tx.wake_after(Duration::from_millis(150));
+        })
+        .child(
+            el().key("notch-header")
+                .absolute(rail + 8., 4.)
+                .size(60., 26.)
+                .hit()
+                .window_drag()
+                .cursor(rune::Cursor::Grab)
+                .center()
+                .child(el().size(22., 3.).radius(1.5).fill(c(0x777d89))),
+        )
+        .child(
+            button(if s.expanded { "−" } else { "+" }, rail + 26., 326., 24.)
+                .key("expand")
+                .on_press_tx(toggle),
+        );
+    let mut strip = el()
+        .key("thumbnail-strip")
+        .absolute(rail + 10., 34.)
+        .size(56., 280.)
+        .clip_rounded(0.);
+    let offset = (s.scroll * 66.).min((s.entries.len() as f32 * 66. - 280.).max(0.));
+    for (i, e) in s.entries.iter().enumerate() {
+        let y = i as f32 * 66. - offset;
+        strip = strip.child(
+            picture(e, 0., y, 56., 56.)
+                .key(format!("image-{i}"))
+                .opacity(if i == s.selected { 1. } else { 0.62 })
+                .hit()
+                .cursor(rune::Cursor::Grab)
+                .on_press(move |s: &mut State| {
+                    ripple(s);
+                    s.selected = i;
+                    s.scroll = i as f32;
+                })
+                .drag_out(move |s: &State| s.drag(i))
+                .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}")),
+        );
+        if i == s.selected {
+            strip = strip.child(
+                el().key("selection-marker")
+                    .absolute(20., y + 59.)
+                    .size(16., 2.)
+                    .radius(1.)
+                    .fill(c(0x9ee8d9)),
+            );
+        }
+    }
+    root = root.child(strip);
+    if s.expanded
+        && let Some(e) = s.entries.get(s.selected)
+    {
+        root = root.child(
+            picture(e, if right { 10. } else { 86. }, 34., 234., 280.)
+                .key("preview")
+                .hit()
+                .cursor(rune::Cursor::Grab)
+                .drag_out(|s: &State| s.drag(s.selected))
+                .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}")),
+        );
+    }
+    el().w_full()
+        .h_full()
+        .child(root)
+        .child(rune::effect(77).size(w, h).effect_backdrop(true))
 }
 fn notch_surfaces() -> [Image; 2] {
     let cache = ImageCache::new(Arc::new(|| {}));
@@ -383,6 +538,9 @@ fn notch_surfaces() -> [Image; 2] {
     })
 }
 fn view(s: &State, _: &mut Cx<State>) -> El {
+    if matches!(s.dock.edge, docking::Edge::Left | docking::Edge::Right) {
+        return side_view(s);
+    }
     let mut root = el()
         .key("notch")
         .on_pointer_move(|s: &mut State, p| s.pointer = [p.x - SHOULDER, p.y])
@@ -391,13 +549,20 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         .absolute(SHOULDER, 0.)
         .size(BODY_W, if s.expanded { EXPANDED_H } else { COMPACT_H })
         .on_secondary_press(|s: &mut State, press: rune::PointerPress, tx| {
-            tx.popup_menu(menu(s), press, menu_action)
+            // Reserve transparent space below the island before showing AppKit's
+            // view-attached menu; otherwise a 52pt panel clips all menu rows.
+            s.menu_host = true;
+            tx.resize_window(shelf_size(s));
+            s.menu_at = Some((s.clock + 0.12, press.x.min(40.), 54.));
+            tx.wake_after(Duration::from_millis(150));
         })
         .child(
             el().absolute(56., 10.)
                 .size(144., 32.)
                 .key("notch-header")
-                .on_press_tx(toggle)
+                .cursor(rune::Cursor::Grab)
+                .hit()
+                .window_drag()
                 .center()
                 .child(label(
                     if s.paused {
@@ -541,9 +706,15 @@ fn main() {
     rune::App::new(AppSpec {
         setup: Some(setup),
         poll: Some(poll),
-        min_size: Some((ISLAND_W, COMPACT_H)),
+        min_size: Some((76., COMPACT_H)),
         scenes: &[
             ("expanded", |s| s.expanded = true),
+            ("left", |s| s.dock.edge = docking::Edge::Left),
+            ("right", |s| s.dock.edge = docking::Edge::Right),
+            ("right-expanded", |s| {
+                s.dock.edge = docking::Edge::Right;
+                s.expanded = true;
+            }),
             ("water", |s| {
                 s.expanded = true;
                 s.ripples.push(([110., 155.], 0.));
@@ -556,7 +727,7 @@ fn main() {
         borderless: true,
         always_on_top: true,
         resizable: false,
-        min_size: Some((ISLAND_W, COMPACT_H)),
+        min_size: Some((76., COMPACT_H)),
         ..Default::default()
     })
     .macos_window(
@@ -566,6 +737,7 @@ fn main() {
             .nonactivating_panel(true),
     )
     .on_ready(|window| {
+        docking::register(window);
         window.place(
             rune::DisplayTarget::Primary,
             rune::OverlayPlacement::Edge {
@@ -586,6 +758,7 @@ mod tests {
     #[test]
     fn demo_drag_has_png_and_never_fake_file() {
         let mut s = State {
+            dock: docking::Dock::default(),
             entries: vec![],
             shell: notch_surfaces(),
             pointer: [110., 26.],
@@ -601,6 +774,9 @@ mod tests {
             expanded: false,
             paused: false,
             pending: false,
+            menu_restore_compact: false,
+            menu_host: false,
+            menu_at: None,
             change: 0,
             status: String::new(),
             demo: true,
@@ -609,6 +785,14 @@ mod tests {
         let mut rt = rune::Runtime::new(s, view, (324., 230.), rune::Env::new(true, 1.));
         rt.state.expanded = true;
         rt.frame(0.);
+        rt.pointer_move(130., 26.);
+        rt.pointer_down(130., 26.);
+        assert!(
+            rt.take_titlebar_action().is_some(),
+            "header must start a native window drag"
+        );
+        rt.pointer_up(130., 26.);
+        rt.frame(0.016);
         rt.wheel_xy(30., 80., 0., -48.);
         rt.frame(1. / 60.);
         assert_eq!(rt.state.selected, 1);

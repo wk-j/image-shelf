@@ -1,0 +1,4 @@
+version = 1
+name = "Image Shelf"
+adapter = ["python3", "e2e/adapter.py"]
+history = true

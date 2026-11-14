@@ -1,0 +1,59 @@
+version = 1
+direction = "LR"
+
+[[node]]
+id = "harness"
+label = "E2E adapter"
+shape = "actor"
+source = "e2e/adapter.py"
+
+[[node]]
+id = "suite"
+label = "Rust regressions + Rune flow"
+source = "scripts/test-e2e.sh"
+
+[[node]]
+id = "docking"
+label = "Docking geometry\nnegative origins + resizing"
+source = "src/docking.rs"
+
+[[node]]
+id = "renderer"
+label = "Rune headless renderer\nexpand / select / collapse"
+source = "scripts/island-qa.json"
+
+[[node]]
+id = "evidence"
+label = "PNG frames + AX trees + log"
+shape = "store"
+
+[[node]]
+id = "native"
+label = "Native macOS dragging\nNOT exercised by this case"
+source = "scripts/E2E.md"
+
+[[edge]]
+from = "harness"
+to = "suite"
+label = "run"
+
+[[edge]]
+from = "suite"
+to = "docking"
+label = "cargo test"
+
+[[edge]]
+from = "suite"
+to = "renderer"
+label = "script + layout assertions"
+
+[[edge]]
+from = "renderer"
+to = "evidence"
+label = "capture"
+
+[[edge]]
+from = "harness"
+to = "native"
+label = "coverage excluded"
+kind = "refused"

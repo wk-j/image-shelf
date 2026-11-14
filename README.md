@@ -5,7 +5,7 @@ An image clipboard shelf for macOS, built with Rust + [Rune](https://github.com/
 ## Features
 
 - Local, persistent image history with deduplication.
-- Compact, translucent island pinned to the top of the screen.
+- Translucent top island or vertical dock at the left/right screen edge.
 - Smooth thumbnail scrolling, image previews, and GPU water-wave feedback.
 - Drag images into compatible apps or copy them for pasting.
 - No server, telemetry, or text clipboard history.
@@ -30,7 +30,8 @@ To build from source, run `./scripts/bundle.sh`, then open `out/Image Shelf.app`
 
 - Keep the app running to capture copied images.
 - Scroll one image per wheel step/swipe, or use ‹ / ›; click a thumbnail to select it. Trackpad momentum does not advance selection.
-- Click + or the counter to expand; − collapses the island.
+- Click + to expand; − collapses the island.
+- Right-click → **Snap left**, **Snap right**, or **Return to top**. Side docks use vertical thumbnails and open previews inward. Header drag-to-snap is experimental; use the menu if your input method does not move the window.
 - Drag a thumbnail or preview into an app that accepts images/files.
 - Right-click for **Copy image**, **Pause/Resume**, **Open history folder**, or **Quit**.
 
@@ -41,3 +42,5 @@ Images stay in `~/Library/Application Support/Image Shelf/images`. Storage is us
 History is limited to **200 images / 512 MB**, with **32 MB / 40 MP per image**. Capture stops when full; existing images are not automatically deleted. Uninstalling preserves history.
 
 Drop support depends on the destination app and has not been verified across apps; copying and pasting is the fallback. Water effects distort app content, not the desktop. The island may overlap menu-bar content. No automatic launch at login.
+
+Native multi-monitor dragging has not been verified. Side docks can overlap a macOS Dock placed on the same edge.

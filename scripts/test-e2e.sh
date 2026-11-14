@@ -25,19 +25,26 @@ PY
 for side in left right; do
   target/release/image-shelf --scene "$side" --size 76x360 --script scripts/sidebar-qa.json --at 0.6 --tree "out/e2e/$side.json" --snap "out/e2e/$side.png"
 done
-target/release/image-shelf --scene right-expanded --size 330x360 --tree out/e2e/right-expanded.json --snap out/e2e/right-expanded.png
+for side in left right; do
+  target/release/image-shelf --scene "$side-expanded" --size 330x360 --tree "out/e2e/$side-expanded.json" --snap "out/e2e/$side-expanded.png"
+done
 python3 - <<'PY'
 import json
-for name in ['left','right','right-expanded']:
+for name in ['left','right','left-expanded','right-expanded']:
     data=json.load(open(f'out/e2e/{name}.json'))
     def walk(n):
         yield n
         for c in n.get('children',[]): yield from walk(c)
     nodes={n.get('key'):n for n in walk(data['accessibility']) if n.get('key')}
     assert 'side-dock' in nodes and 'thumbnail-strip' in nodes
-    assert ('preview' in nodes)==(name=='right-expanded')
-    assert 'select-next' not in nodes, 'side dock must not reuse horizontal controls'
+    assert ('preview' in nodes)==name.endswith('-expanded')
+    assert 'select-next' in nodes and 'select-previous' in nodes, 'side dock must retain navigation'
+    for key in ['select-next','select-previous','expand']:
+        x,y,w,h=nodes[key]['bounds']
+        assert 0 <= x and x+w <= (330 if name.endswith('-expanded') else 76) and 12 <= y and y+h <= 348
     a,b=nodes['image-0']['bounds'],nodes['image-1']['bounds']
     assert a[0]==b[0] and b[1]>a[1], 'thumbnails must run vertically'
 print('PASS: left/right vertical rails and inward expanded preview')
 PY
+
+swift scripts/check-side-alpha.swift

@@ -1,1 +1,1 @@
-{"events":[{"t":0.2,"type":"tap","key":"image-1"}]}
+{"events":[{"t":0.1,"type":"tap","key":"select-next"},{"t":0.2,"type":"tap","key":"select-previous"},{"t":0.3,"type":"tap","key":"image-1"}]}

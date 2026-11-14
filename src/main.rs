@@ -16,6 +16,7 @@ struct State {
     dock: docking::Dock,
     entries: Vec<Entry>,
     shell: [Image; 2],
+    side_shell: [Image; 4],
     pointer: [f32; 2],
     clock: f64,
     ripples: Vec<([f32; 2], f64)>,
@@ -49,6 +50,7 @@ impl State {
             dock: docking::Dock::default(),
             entries: vec![],
             shell: notch_surfaces(),
+            side_shell: side_surfaces(),
             pointer: [110., 26.],
             clock: 0.,
             ripples: vec![],
@@ -218,6 +220,7 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
     let edge_changed = old_edge != s.dock.edge;
     if edge_changed {
         tx.resize_window(shelf_size(s));
+        tx.wake_after(Duration::from_millis(16));
     }
     let animating = edge_changed || !s.ripples.is_empty();
     s.ripples.retain(|(_, start)| t - start < 0.4);
@@ -356,6 +359,7 @@ fn toggle(s: &mut State, tx: &mut Tx) {
     ripple(s);
     s.expanded = !s.expanded;
     tx.resize_window(shelf_size(s));
+    tx.wake_after(Duration::from_millis(16));
 }
 fn menu(s: &State) -> rune::PopupMenu {
     rune::PopupMenu::new()
@@ -382,11 +386,13 @@ fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
     if s.menu_host {
         s.menu_host = false;
         tx.resize_window(shelf_size(s));
+        tx.wake_after(Duration::from_millis(16));
     }
     if s.menu_restore_compact {
         s.menu_restore_compact = false;
         s.expanded = false;
         tx.resize_window(shelf_size(s));
+        tx.wake_after(Duration::from_millis(16));
     }
     match picked {
         Some("copy") => {
@@ -429,6 +435,7 @@ fn shelf_size(s: &State) -> (f32, f32) {
 fn set_edge(s: &mut State, edge: docking::Edge, tx: &mut Tx) {
     docking::place(&mut s.dock, edge);
     tx.resize_window(shelf_size(s));
+    tx.wake_after(Duration::from_millis(16));
 }
 fn side_view(s: &State) -> El {
     let (w, h) = shelf_size(s);
@@ -437,8 +444,6 @@ fn side_view(s: &State) -> El {
     let mut root = el()
         .key("side-dock")
         .size(w, h)
-        .clip_rounded(18.)
-        .fill(c(0x090a0e).alpha(0.72))
         .on_pointer_move(|s: &mut State, p| s.pointer = [p.x, p.y])
         .on_press(ripple)
         .on_wheel(wheel)
@@ -450,6 +455,7 @@ fn side_view(s: &State) -> El {
                 s.menu_restore_compact = true;
                 s.expanded = true;
                 tx.resize_window(shelf_size(s));
+                tx.wake_after(Duration::from_millis(16));
             }
             let x = if s.dock.edge == docking::Edge::Left {
                 86.
@@ -461,7 +467,7 @@ fn side_view(s: &State) -> El {
         })
         .child(
             el().key("notch-header")
-                .absolute(rail + 8., 4.)
+                .absolute(rail + 8., 12.)
                 .size(60., 26.)
                 .hit()
                 .window_drag()
@@ -470,7 +476,27 @@ fn side_view(s: &State) -> El {
                 .child(el().size(22., 3.).radius(1.5).fill(c(0x777d89))),
         )
         .child(
-            button(if s.expanded { "−" } else { "+" }, rail + 26., 326., 24.)
+            button("↑", rail + 6., 320., 20.)
+                .key("select-previous")
+                .on_press(|s: &mut State| {
+                    ripple(s);
+                    s.selected = s.selected.saturating_sub(1);
+                    s.scroll = s.selected as f32;
+                }),
+        )
+        .child(
+            button("↓", rail + 28., 320., 20.)
+                .key("select-next")
+                .on_press(|s: &mut State| {
+                    ripple(s);
+                    if s.selected + 1 < s.entries.len() {
+                        s.selected += 1;
+                        s.scroll = s.selected as f32;
+                    }
+                }),
+        )
+        .child(
+            button(if s.expanded { "−" } else { "+" }, rail + 50., 320., 20.)
                 .key("expand")
                 .on_press_tx(toggle),
         );
@@ -521,8 +547,43 @@ fn side_view(s: &State) -> El {
     }
     el().w_full()
         .h_full()
+        .child(
+            el().absolute(0., 0.)
+                .size(w, h)
+                .pixels(s.side_shell[usize::from(right) * 2 + usize::from(s.expanded)].pixels()),
+        )
         .child(root)
         .child(rune::effect(77).size(w, h).effect_backdrop(true))
+}
+fn side_surfaces() -> [Image; 4] {
+    let cache = ImageCache::new(Arc::new(|| {}));
+    std::array::from_fn(|i| {
+        let w = if i % 2 == 0 { 76. } else { 330. };
+        let r = if i % 2 == 0 { 20. } else { 24. };
+        // Rotate the top island's concave shoulders onto the attached screen edge.
+        // Keep the upper/lower cutouts transparent; the inward corners stay convex.
+        let path = format!(
+            "M0 0 C0 6.627 5.373 12 12 12 H{} Q{} 12 {} {} V{} Q{} 348 {} 348 H12 C5.373 348 0 353.373 0 360 Z",
+            w - r,
+            w,
+            w,
+            12. + r,
+            348. - r,
+            w,
+            w - r
+        );
+        let transform = if i >= 2 {
+            format!("translate({w} 0) scale(-1 1)")
+        } else {
+            String::new()
+        };
+        let svg = format!(
+            r##"<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="360"><defs><linearGradient id="g"><stop stop-color="#090a0d"/><stop offset="1" stop-color="#111319"/></linearGradient></defs><path transform="{transform}" d="{path}" fill="url(#g)" fill-opacity="0.62"/></svg>"##
+        );
+        let image = cache.svg(svg.into_bytes(), w, 2.);
+        let _ = image.wait();
+        image
+    })
 }
 fn notch_surfaces() -> [Image; 2] {
     let cache = ImageCache::new(Arc::new(|| {}));
@@ -553,6 +614,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             // view-attached menu; otherwise a 52pt panel clips all menu rows.
             s.menu_host = true;
             tx.resize_window(shelf_size(s));
+            tx.wake_after(Duration::from_millis(16));
             s.menu_at = Some((s.clock + 0.12, press.x.min(40.), 54.));
             tx.wake_after(Duration::from_millis(150));
         })
@@ -711,6 +773,10 @@ fn main() {
             ("expanded", |s| s.expanded = true),
             ("left", |s| s.dock.edge = docking::Edge::Left),
             ("right", |s| s.dock.edge = docking::Edge::Right),
+            ("left-expanded", |s| {
+                s.dock.edge = docking::Edge::Left;
+                s.expanded = true;
+            }),
             ("right-expanded", |s| {
                 s.dock.edge = docking::Edge::Right;
                 s.expanded = true;
@@ -761,6 +827,7 @@ mod tests {
             dock: docking::Dock::default(),
             entries: vec![],
             shell: notch_surfaces(),
+            side_shell: side_surfaces(),
             pointer: [110., 26.],
             clock: 0.,
             ripples: vec![],

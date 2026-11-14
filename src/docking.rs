@@ -59,6 +59,24 @@ pub struct Dock {
     last_frame: Option<Rect>,
     moving: bool,
 }
+impl Dock {
+    fn observe(&mut self, r: Rect, mouse_down: bool) -> (bool, bool) {
+        let resizing = self
+            .last_frame
+            .is_some_and(|old| old.w != r.w || old.h != r.h);
+        let moved = self
+            .last_frame
+            .is_some_and(|old| old.x != r.x || old.y != r.y);
+        // AppKit can reposition a borderless window during resize or menu tracking.
+        // Only an observed mouse-held move starts a drag; never reclassify docking
+        // from a programmatic frame change and an unrelated pointer location.
+        if moved && !resizing && mouse_down {
+            self.moving = true;
+        }
+        self.last_frame = Some(r);
+        (resizing, moved)
+    }
+}
 #[cfg(target_os = "macos")]
 mod native {
     use super::*;
@@ -141,16 +159,11 @@ mod native {
             }
             let r = frame(w);
             let buttons: usize = msg_send![class!(NSEvent), pressedMouseButtons];
-            let resizing = dock
-                .last_frame
-                .is_some_and(|old| old.w != r.w || old.h != r.h);
-            let moved = dock
-                .last_frame
-                .is_some_and(|old| old.x != r.x || old.y != r.y);
-            dock.last_frame = Some(r);
-            if !resizing && moved {
-                dock.moving = true;
+            let initialized = dock.anchor.is_none();
+            if initialized {
+                dock.anchor = screens((r.x + r.w / 2., r.y + r.h / 2.));
             }
+            let (resizing, moved) = dock.observe(r, buttons & 1 != 0);
             if buttons & 1 != 0 {
                 return dock.moving;
             }
@@ -163,7 +176,7 @@ mod native {
                     dock.anchor = Some((screen, visible));
                 }
             }
-            if (moved || resizing || settled)
+            if (moved || resizing || settled || initialized)
                 && let Some((screen, visible)) = dock.anchor
             {
                 let placed = snapped(r, screen, visible, dock.edge);
@@ -179,6 +192,46 @@ pub use native::{place, register, tick};
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn programmatic_moves_never_start_a_drag() {
+        let mut dock = Dock::default();
+        let r = Rect {
+            x: 798.,
+            y: 1028.,
+            w: 324.,
+            h: 52.,
+        };
+        dock.observe(r, false);
+        dock.observe(
+            Rect {
+                x: 0.,
+                y: 998.,
+                ..r
+            },
+            false,
+        );
+        assert!(!dock.moving);
+        dock.observe(
+            Rect {
+                x: 0.,
+                y: 680.,
+                h: 400.,
+                ..r
+            },
+            true,
+        );
+        assert!(!dock.moving, "resize while pressed is not header dragging");
+        dock.observe(
+            Rect {
+                x: 10.,
+                y: 680.,
+                h: 400.,
+                ..r
+            },
+            true,
+        );
+        assert!(dock.moving, "actual mouse-held movement starts drag");
+    }
     #[test]
     fn snap_negative_display_and_dock_work_area() {
         let screen = Rect {

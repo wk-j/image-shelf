@@ -52,7 +52,7 @@ def main():
             'evidence': {'artifact': 'log.txt'}})
         # Copy only this successful invocation's frames; never reuse stale evidence on failure.
         if completed.returncode == 0:
-            for name in ('expanded.png', 'expanded.json', 'compact.png', 'compact.json', 'left.png', 'left.json', 'right.png', 'right.json', 'right-expanded.png', 'right-expanded.json'):
+            for name in ('expanded.png', 'expanded.json', 'compact.png', 'compact.json', 'left.png', 'left.json', 'right.png', 'right.json', 'right-expanded.png', 'right-expanded.json', 'left-expanded.png', 'left-expanded.json'):
                 shutil.copy2(ROOT / 'out/e2e' / name, dest / name)
     except Exception as exc:
         result['verdict'] = 'ERROR'

@@ -5,12 +5,73 @@ use rune::{
     AppSpec, ClipboardContent, ClipboardImage, Cx, DragItem, El, Image, ImageCache, TextStyle, Tx,
     Waker, el, text,
 };
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, mpsc},
+    time::Duration,
+};
 struct Entry {
     path: PathBuf,
-    png: Arc<[u8]>,
-    image: Image,
+    // Demo fixtures only. Saved history stays on disk and is read on drag/copy.
+    png: Option<Arc<[u8]>>,
+    // None until a thumbnail worker finishes.
+    image: Option<Image>,
     size: (u32, u32),
+}
+impl Entry {
+    fn bytes(&self) -> Option<Arc<[u8]>> {
+        self.png
+            .clone()
+            .or_else(|| std::fs::read(&self.path).ok().map(Into::into))
+    }
+}
+// Largest preview is 234x280pt at 2x; fit both previews without decoding more pixels.
+const THUMB_PX: u32 = 560;
+type Thumb = (u32, u32, Vec<u8>);
+type ThumbJob = (PathBuf, Option<image::DynamicImage>);
+struct Thumbs {
+    jobs: mpsc::Sender<ThumbJob>,
+    done: mpsc::Receiver<(PathBuf, Thumb)>,
+}
+impl Thumbs {
+    fn spawn(wake: Waker) -> Self {
+        let (jobs, queue) = mpsc::channel::<ThumbJob>();
+        let (finished, done) = mpsc::channel();
+        let queue = Arc::new(Mutex::new(queue));
+        let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(4));
+        for _ in 0..workers {
+            let (queue, finished, wake) = (queue.clone(), finished.clone(), wake.clone());
+            std::thread::spawn(move || {
+                loop {
+                    let Ok((path, decoded)) = queue.lock().unwrap_or_else(|e| e.into_inner()).recv()
+                    else {
+                        return;
+                    };
+                    let decoded = decoded.or_else(|| {
+                        image::load_from_memory(&std::fs::read(&path).ok()?).ok()
+                    });
+                    if let Some(img) = decoded {
+                        if finished.send((path, thumbnail(&img))).is_err() {
+                            return;
+                        }
+                        wake();
+                    }
+                }
+            });
+        }
+        Self { jobs, done }
+    }
+}
+fn thumbnail(img: &image::DynamicImage) -> Thumb {
+    let t = img.thumbnail(THUMB_PX, THUMB_PX).into_rgba8();
+    (t.width(), t.height(), t.into_raw())
+}
+// Dimensions from the PNG header alone, without reading or decoding the file.
+fn png_size(path: &Path) -> Option<(u32, u32)> {
+    use std::io::Read;
+    let mut head = [0u8; 24];
+    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    ClipboardImage::from_png(head.to_vec()).map(|c| c.size())
 }
 struct State {
     dock: docking::Dock,
@@ -21,6 +82,7 @@ struct State {
     clock: f64,
     ripples: Vec<([f32; 2], f64)>,
     cache: ImageCache,
+    thumbs: Option<Thumbs>,
     dir: PathBuf,
     selected: usize,
     scroll: f32,
@@ -55,6 +117,7 @@ impl State {
             clock: 0.,
             ripples: vec![],
             cache: ImageCache::new(Arc::new(|| {})),
+            thumbs: None,
             dir,
             selected: 0,
             scroll: 0.,
@@ -74,16 +137,20 @@ impl State {
         if demo {
             s.fixtures();
         } else {
-            match store::list(&s.dir) {
-                Ok(paths) => {
-                    for path in paths.into_iter().take(store::MAX_ITEMS) {
-                        if std::fs::metadata(&path)
-                            .map_or(true, |m| m.len() > store::MAX_IMAGE as u64)
-                        {
+            // Only headers are read here; setup() queues thumbnails off the main thread.
+            match store::scan(&s.dir) {
+                Ok(files) => {
+                    for (path, len) in files.into_iter().take(store::MAX_ITEMS) {
+                        if len > store::MAX_IMAGE as u64 {
                             continue;
                         }
-                        if let Ok(bytes) = std::fs::read(&path) {
-                            s.insert(path, bytes.into());
+                        if let Some(size) = png_size(&path) {
+                            s.entries.push(Entry {
+                                path,
+                                png: None,
+                                image: None,
+                                size,
+                            });
                         }
                     }
                 }
@@ -92,20 +159,6 @@ impl State {
         }
         s
     }
-    fn insert(&mut self, path: PathBuf, png: Arc<[u8]>) {
-        if self.entries.iter().any(|e| e.path == path) {
-            return;
-        }
-        if let Some(clip) = ClipboardImage::from_png(png.clone()) {
-            let image = self.cache.load(thumbnail(&png));
-            self.entries.push(Entry {
-                path,
-                png,
-                image,
-                size: clip.size(),
-            });
-        }
-    }
     fn capture(&mut self, content: &ClipboardContent) {
         if self.paused {
             return;
@@ -113,15 +166,30 @@ impl State {
         let Some(image) = content.image() else {
             return;
         };
-        let png: Arc<[u8]> = image.png().into();
-        match store::save(&self.dir, &png) {
-            Ok(path) => {
+        match store::save(&self.dir, image.png()) {
+            Ok((path, decoded)) => {
                 if self.entries.iter().any(|e| e.path == path) {
                     return;
                 }
-                self.insert(path, png);
-                let e = self.entries.pop().unwrap();
-                self.entries.insert(0, e);
+                let thumb = match &self.thumbs {
+                    Some(t) => {
+                        let _ = t.jobs.send((path.clone(), decoded));
+                        None
+                    }
+                    None => decoded.map(|d| {
+                        let (w, h, px) = thumbnail(&d);
+                        self.cache.rgba(w, h, px)
+                    }),
+                };
+                self.entries.insert(
+                    0,
+                    Entry {
+                        path,
+                        png: None,
+                        image: thumb,
+                        size: image.size(),
+                    },
+                );
                 self.selected = 0;
                 self.scroll = 0.;
                 self.status = "Image saved locally. Drag it into another app.".into();
@@ -139,19 +207,24 @@ impl State {
             });
             let mut out = std::io::Cursor::new(vec![]);
             img.write_to(&mut out, image::ImageFormat::Png).unwrap();
-            self.insert(
-                PathBuf::from(format!("demo-{n}.png")),
-                out.into_inner().into(),
-            );
+            let (w, h, px) = thumbnail(&img.into());
+            self.entries.push(Entry {
+                path: PathBuf::from(format!("demo-{n}.png")),
+                png: Some(out.into_inner().into()),
+                image: Some(self.cache.rgba(w, h, px)),
+                size: (640, 400),
+            });
         }
         for e in &self.entries {
-            let _ = e.image.wait();
+            if let Some(image) = &e.image {
+                let _ = image.wait();
+            }
         }
         self.status = "Demo images • clipboard monitoring disabled".into();
     }
     fn drag(&self, i: usize) -> Option<DragItem> {
         let e = self.entries.get(i)?;
-        let item = DragItem::new().png(e.png.to_vec());
+        let item = DragItem::new().png(e.bytes()?.to_vec());
         Some(if self.demo {
             item
         } else {
@@ -193,9 +266,11 @@ fn setup(s: &mut State, wake: Waker) {
         return;
     }
     s.cache = ImageCache::new(wake.clone());
-    for e in &mut s.entries {
-        e.image = s.cache.load(thumbnail(&e.png));
+    let thumbs = Thumbs::spawn(wake.clone());
+    for e in &s.entries {
+        let _ = thumbs.jobs.send((e.path.clone(), None));
     }
+    s.thumbs = Some(thumbs);
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(Duration::from_millis(700));
@@ -205,6 +280,15 @@ fn setup(s: &mut State, wake: Waker) {
 }
 fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
     s.clock = t;
+    let mut loaded = false;
+    if let Some(thumbs) = &s.thumbs {
+        while let Ok((path, (w, h, px))) = thumbs.done.try_recv() {
+            if let Some(e) = s.entries.iter_mut().find(|e| e.path == path) {
+                e.image = Some(s.cache.rgba(w, h, px));
+                loaded = true;
+            }
+        }
+    }
     if let Some((due, x, y)) = s.menu_at {
         if t >= due {
             s.menu_at = None;
@@ -222,7 +306,7 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         tx.resize_window(shelf_size(s));
         tx.wake_after(Duration::from_millis(16));
     }
-    let animating = edge_changed || !s.ripples.is_empty();
+    let animating = loaded || edge_changed || !s.ripples.is_empty();
     s.ripples.retain(|(_, start)| t - start < 0.4);
     if !s.ripples.is_empty() {
         tx.wake_after(Duration::from_millis(16));
@@ -242,19 +326,6 @@ fn poll(s: &mut State, t: f64, tx: &mut Tx) -> bool {
         }
     }
     animating
-}
-fn thumbnail(png: &[u8]) -> Arc<[u8]> {
-    if let Ok(img) = image::load_from_memory(png) {
-        let mut out = std::io::Cursor::new(vec![]);
-        if img
-            .thumbnail(1200, 900)
-            .write_to(&mut out, image::ImageFormat::Png)
-            .is_ok()
-        {
-            return out.into_inner().into();
-        }
-    }
-    png.into()
 }
 fn c(n: u32) -> rune::Color {
     rune::color::hex(&format!("#{n:06x}")).unwrap()
@@ -278,16 +349,26 @@ fn button(v: &str, x: f32, y: f32, w: f32) -> El {
 fn picture(e: &Entry, x: f32, y: f32, w: f32, h: f32) -> El {
     let ratio = (w / e.size.0 as f32).min(h / e.size.1 as f32);
     let (pw, ph) = (e.size.0 as f32 * ratio, e.size.1 as f32 * ratio);
-    el().absolute(x, y)
+    let frame = el()
+        .absolute(x, y)
         .size(w, h)
         .gradient(c(0x191b22), c(0x0e0f13))
         .radius(8.)
-        .clip_rounded(8.)
-        .child(
+        .clip_rounded(8.);
+    match &e.image {
+        Some(image) => frame.child(
             el().absolute((w - pw) / 2., (h - ph) / 2.)
                 .size(pw, ph)
-                .pixels(e.image.pixels()),
-        )
+                .pixels(image.pixels()),
+        ),
+        None => frame,
+    }
+}
+// Cells a strip can show, plus one neighbour each side so a one-step move still slides in.
+fn visible(offset: f32, pitch: f32, span: f32, len: usize) -> std::ops::Range<usize> {
+    let first = ((offset / pitch).floor() as isize - 1).max(0) as usize;
+    let last = (((offset + span) / pitch).ceil().max(0.) as usize + 1).min(len);
+    first.min(last)..last
 }
 const ISLAND_W: f32 = 324.;
 const BODY_W: f32 = 300.;
@@ -397,7 +478,7 @@ fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
     match picked {
         Some("copy") => {
             if let Some(e) = s.entries.get(s.selected)
-                && let Some(img) = ClipboardImage::from_png(e.png.clone())
+                && let Some(img) = e.bytes().and_then(ClipboardImage::from_png)
             {
                 tx.copy_rich(ClipboardContent::default().with_image(img));
                 s.status = "Copied image".into();
@@ -506,7 +587,8 @@ fn side_view(s: &State) -> El {
         .size(56., 280.)
         .clip_rounded(0.);
     let offset = (s.scroll * 66.).min((s.entries.len() as f32 * 66. - 280.).max(0.));
-    for (i, e) in s.entries.iter().enumerate() {
+    for i in visible(offset, 66., 280., s.entries.len()) {
+        let e = &s.entries[i];
         let y = i as f32 * 66. - offset;
         strip = strip.child(
             picture(e, 0., y, 56., 56.)
@@ -688,7 +770,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .size(36., 32.)
             .clip_rounded(8.)
             .key("compact-images");
-        for (i, e) in s.entries.iter().enumerate() {
+        for i in visible(s.selected as f32 * 42., 42., 36., s.entries.len()) {
+            let e = &s.entries[i];
             compact = compact.child(
                 picture(e, (i as f32 - s.selected as f32) * 42., 0., 36., 32.)
                     .key(format!("compact-image-{i}"))
@@ -710,7 +793,8 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .size(280., 49.)
             .clip_rounded(0.)
             .key("thumbnail-strip");
-        for (i, e) in s.entries.iter().enumerate() {
+        for i in visible(offset, 69., 280., s.entries.len()) {
+            let e = &s.entries[i];
             strip = strip.child(
                 picture(e, i as f32 * 69. - offset, 0., 62., 44.)
                     .key(format!("image-{i}"))
@@ -832,6 +916,7 @@ mod tests {
             clock: 0.,
             ripples: vec![],
             cache: ImageCache::new(Arc::new(|| {})),
+            thumbs: None,
             dir: PathBuf::new(),
             selected: 0,
             scroll: 0.,

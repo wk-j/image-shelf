@@ -178,6 +178,8 @@ struct State {
     dir: PathBuf,
     selected: usize,
     scroll: f32,
+    quick_start: usize,
+    grid_start: usize,
     wheel_last: f64,
     wheel_total: f32,
     wheel_latched: bool,
@@ -213,6 +215,8 @@ impl State {
             dir,
             selected: 0,
             scroll: 0.,
+            quick_start: 0,
+            grid_start: 0,
             wheel_last: -1.,
             wheel_total: 0.,
             wheel_latched: false,
@@ -296,6 +300,8 @@ impl State {
                 );
                 self.selected = 0;
                 self.scroll = 0.;
+                self.quick_start = 0;
+                self.grid_start = 0;
                 self.status = "Image saved locally. Drag it into another app.".into();
             }
             Err(e) => self.status = e.to_string(),
@@ -726,6 +732,34 @@ fn media_card(
     )
 }
 
+fn ensure_visible(anchor: usize, selected: usize, span: usize, len: usize) -> usize {
+    if len <= span {
+        return 0;
+    }
+    let a = anchor.min(len - span);
+    if selected < a {
+        selected
+    } else if selected >= a + span {
+        selected + 1 - span
+    } else {
+        a
+    }
+}
+
+impl State {
+    fn step_to(&mut self, next: usize) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let len = self.entries.len();
+        self.selected = next.min(len - 1);
+        let rail_anchor = self.scroll.round().max(0.) as usize;
+        self.scroll = ensure_visible(rail_anchor, self.selected, 4, len) as f32;
+        self.quick_start = ensure_visible(self.quick_start, self.selected, 3, len);
+        self.grid_start = ensure_visible(self.grid_start, self.selected, 6, len);
+    }
+}
+
 fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
     if event.precise && event.phase == rune::GesturePhase::Ended && !event.momentum {
         s.wheel_total = 0.;
@@ -769,12 +803,12 @@ fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
         s.wheel_last = s.clock;
         s.wheel_total = delta;
     }
-    if s.wheel_total < 0. {
-        s.selected = (s.selected + 1).min(s.entries.len().saturating_sub(1));
+    let next = if s.wheel_total < 0. {
+        (s.selected + 1).min(s.entries.len().saturating_sub(1))
     } else {
-        s.selected = s.selected.saturating_sub(1);
-    }
-    s.scroll = s.selected as f32;
+        s.selected.saturating_sub(1)
+    };
+    s.step_to(next);
     tx.animated();
     true
 }
@@ -1081,7 +1115,6 @@ fn side_view(s: &State) -> El {
             .on_press(move |s: &mut State| {
                 ripple(s);
                 s.selected = slot;
-                s.scroll = slot as f32;
             })
             .drag_out(move |s: &State| s.drag(slot))
             .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}"));
@@ -1140,18 +1173,14 @@ fn side_view(s: &State) -> El {
             .child(
                 nav_btn(&UP, rail_local_x + 9., has_prev, "Previous image")
                     .key("select-previous")
-                    .on_press(|s: &mut State| {
-                        s.selected = s.selected.saturating_sub(1);
-                        s.scroll = s.selected as f32;
-                    }),
+                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
             )
             .child(
                 nav_btn(&DOWN, rail_local_x + 29., has_next, "Next image")
                     .key("select-next")
                     .on_press(|s: &mut State| {
                         if s.selected + 1 < s.entries.len() {
-                            s.selected += 1;
-                            s.scroll = s.selected as f32;
+                            s.step_to(s.selected + 1);
                         }
                     }),
             )
@@ -1266,18 +1295,14 @@ fn side_view(s: &State) -> El {
             .child(
                 step_sq(&UP, 218., has_prev, "Previous image")
                     .key("select-previous")
-                    .on_press(|s: &mut State| {
-                        s.selected = s.selected.saturating_sub(1);
-                        s.scroll = s.selected as f32;
-                    }),
+                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
             )
             .child(
                 step_sq(&DOWN, 250., has_next, "Next image")
                     .key("select-next")
                     .on_press(|s: &mut State| {
                         if s.selected + 1 < s.entries.len() {
-                            s.selected += 1;
-                            s.scroll = s.selected as f32;
+                            s.step_to(s.selected + 1);
                         }
                     }),
             );
@@ -1393,23 +1418,14 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         );
     } else {
         let count = s.entries.len().min(3);
-        let start = s
-            .selected
-            .saturating_sub(2)
-            .min(s.entries.len().saturating_sub(count));
+        let start = s.quick_start.min(s.entries.len().saturating_sub(count));
         for slot in 0..count {
             let i = start + slot;
             let e = &s.entries[i];
             let active = i == s.selected;
-            let (tw, th, ty) = if active {
-                (34., 30., 0.)
-            } else {
-                (32., 28., 1.)
-            };
-            let tx_pos = slot as f32 * 38. - if active { 1. } else { 0. };
             let mut mini = media_card(
                 e,
-                [tx_pos, ty, tw, th],
+                [slot as f32 * 38., 1., 32., 28.],
                 8.,
                 (
                     if active { 1.8 } else { 0.8 },
@@ -1427,7 +1443,6 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .on_press(move |s: &mut State| {
                 ripple(s);
                 s.selected = i;
-                s.scroll = i as f32;
             })
             .drag_out(move |s: &State| s.drag(i))
             .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}"));
@@ -1619,10 +1634,7 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             }
         } else {
             let count = s.entries.len().min(6);
-            let page_start = s
-                .selected
-                .saturating_sub(5)
-                .min(s.entries.len().saturating_sub(count));
+            let page_start = s.grid_start.min(s.entries.len().saturating_sub(count));
             for cell in 0..count {
                 let i = page_start + cell;
                 let col = cell % 3;
@@ -1649,7 +1661,6 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
                 .on_press(move |s: &mut State| {
                     ripple(s);
                     s.selected = i;
-                    s.scroll = i as f32;
                 })
                 .drag_out(move |s: &State| s.drag(i))
                 .on_drag_end(|s: &mut State, o, _| s.status = format!("Drag: {o:?}"));
@@ -1687,18 +1698,14 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .child(
                 pager_btn("‹ Prev", 10., has_prev, "Previous image")
                     .key("select-previous")
-                    .on_press(|s: &mut State| {
-                        s.selected = s.selected.saturating_sub(1);
-                        s.scroll = s.selected as f32;
-                    }),
+                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
             )
             .child(
                 pager_btn("Next ›", 65., has_next, "Next image")
                     .key("select-next")
                     .on_press(|s: &mut State| {
                         if s.selected + 1 < s.entries.len() {
-                            s.selected += 1;
-                            s.scroll = s.selected as f32;
+                            s.step_to(s.selected + 1);
                         }
                     }),
             );
@@ -2057,5 +2064,141 @@ mod tests {
         s.capture(&ClipboardContent::default());
         assert_eq!(before, s.entries.len());
         assert!(s.drag(999).is_none());
+    }
+
+    #[test]
+    fn clicking_visible_thumbnail_never_shifts_positions() {
+        let mut s = State::new();
+        s.demo = true;
+        s.fixtures();
+        // Duplicate fixtures to 12 entries so all viewports (3-up, 4-up rail, 6-up grid) have overflow.
+        for i in 0..6 {
+            let e = &s.entries[i];
+            s.entries.push(Entry {
+                path: PathBuf::from(format!("Extra_{i}.png")),
+                png: e.png.clone(),
+                image: None,
+                size: e.size,
+                bytes_len: e.bytes_len,
+                ambient: e.ambient,
+                has_alpha: e.has_alpha,
+            });
+        }
+
+        // 1. Side dock expanded rail: scroll down to anchor 5 (showing 5, 6, 7, 8), then click slot #3 (index 7).
+        s.dock.edge = docking::Edge::Left;
+        s.expanded = true;
+        s.step_to(8); // rail anchor = 5 (showing 5..=8)
+        let size = shelf_size(&s);
+        let mut rt = rune::Runtime::new(s, view, size, rune::Env::new(true, 1.));
+        rt.frame(0.);
+        let before: Vec<_> = (5..=8)
+            .map(|i| {
+                rt.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        // Click thumbnail #7 (3rd visible thumbnail in the rail).
+        let target_rect = before[2];
+        let (cx, cy) = (target_rect[0] + 20., target_rect[1] + 20.);
+        rt.pointer_move(cx, cy);
+        rt.pointer_down(cx, cy);
+        rt.pointer_up(cx, cy);
+        for _ in 0..20 {
+            rt.frame(1. / 60.);
+        }
+        assert_eq!(rt.state.selected, 7);
+        let after: Vec<_> = (5..=8)
+            .map(|i| {
+                rt.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        assert_eq!(
+            before, after,
+            "side rail thumbnails must never switch position on click"
+        );
+
+        // 2. Top expanded 3x2 grid & 3-up capsule: step to 8 (grid_start=3, quick_start=6), click grid cell & quick slot.
+        let mut s2 = rt.state;
+        s2.dock.edge = docking::Edge::Top;
+        s2.expanded = true;
+        s2.step_to(8);
+        let mut rt2 = rune::Runtime::new(
+            s2,
+            view,
+            (EXPANDED_WIN_W, EXPANDED_WIN_H),
+            rune::Env::new(true, 1.),
+        );
+        rt2.frame(0.);
+        let grid_before: Vec<_> = (3..=8)
+            .map(|i| {
+                rt2.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        let quick_before: Vec<_> = (6..=8)
+            .map(|i| {
+                rt2.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("compact-image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        // Click image-4 in 3x2 grid.
+        let g = grid_before[1];
+        rt2.pointer_move(g[0] + 10., g[1] + 10.);
+        rt2.pointer_down(g[0] + 10., g[1] + 10.);
+        rt2.pointer_up(g[0] + 10., g[1] + 10.);
+        for _ in 0..20 {
+            rt2.frame(1. / 60.);
+        }
+        assert_eq!(rt2.state.selected, 4);
+        let grid_after: Vec<_> = (3..=8)
+            .map(|i| {
+                rt2.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        assert_eq!(
+            grid_before, grid_after,
+            "3x2 grid thumbnails must stay in place on click"
+        );
+
+        // Click compact-image-6 in top 3-up strip.
+        let q = quick_before[0];
+        rt2.pointer_move(q[0] + 10., q[1] + 10.);
+        rt2.pointer_down(q[0] + 10., q[1] + 10.);
+        rt2.pointer_up(q[0] + 10., q[1] + 10.);
+        for _ in 0..20 {
+            rt2.frame(1. / 60.);
+        }
+        assert_eq!(rt2.state.selected, 6);
+        let quick_after: Vec<_> = (6..=8)
+            .map(|i| {
+                rt2.elements()
+                    .into_iter()
+                    .find(|e| e.key.as_deref() == Some(&format!("compact-image-{i}")))
+                    .unwrap()
+                    .rect
+            })
+            .collect();
+        assert_eq!(
+            quick_before, quick_after,
+            "top 3-up thumbnails must stay in place on click"
+        );
     }
 }

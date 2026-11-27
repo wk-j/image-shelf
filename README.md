@@ -5,9 +5,9 @@ An image clipboard shelf for macOS, built with Rust + [Rune](https://github.com/
 ## Features
 
 - Local, persistent image history with deduplication.
-- Translucent top island or vertical dock at the left/right screen edge.
-- Smooth thumbnail scrolling, image previews, and GPU water-wave feedback.
-- Drag images into compatible apps or copy them for pasting.
+- Smoked-quartz **Liquid Glass** floating top capsule or vertical dock at the left/right screen edge (`NSGlassEffectView` / `NSVisualEffectView` with ambient image color bleed).
+- Spring-animated expand/collapse morphing, 3-up compact strip, split studio loupe + 3×2 mini-pager inspector, alpha checkerboard for transparent PNGs, and GPU water-wave feedback.
+- One-click **Copy** button, or drag images directly into compatible apps.
 - No server, telemetry, or text clipboard history.
 
 ## Installation
@@ -29,9 +29,9 @@ To build from source, run `./scripts/bundle.sh`, then open `out/Image Shelf.app`
 ## Usage
 
 - Keep the app running to capture copied images.
-- Scroll one image per wheel step/swipe, or use ‹ / ›; click a thumbnail to select it. Trackpad momentum does not advance selection.
-- Click + to expand; − collapses the island.
-- Right-click → **Snap left**, **Snap right**, or **Return to top**. Side docks use vertical thumbnails and open previews inward. Header drag-to-snap is experimental; use the menu if your input method does not move the window.
+- Scroll one image per wheel step/swipe, click a thumbnail in the 3-up capsule or 3×2 inspector grid, or use **‹ Prev** / **Next ›**. Trackpad momentum does not advance selection.
+- Click anywhere on the capsule header (or **+** / **−**) to smoothly expand or collapse the shelf; click **Copy** to copy the selected image immediately.
+- Drag the top grip pill or right-click → **Snap left**, **Snap right**, or **Return to top**. Side docks use vertical thumbnails and open a studio preview inward.
 - Drag a thumbnail or preview into an app that accepts images/files.
 - Right-click for **Copy image**, **Pause/Resume**, **Open history folder**, or **Quit**.
 

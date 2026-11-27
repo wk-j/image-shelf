@@ -12,7 +12,7 @@ Native checklist (macOS):
    Drag away to unpin. The +/− controls still resize; images remain drag-out targets.
 5. Repeat on a second monitor with a different scale/negative desktop origin.
 
-The native menu flows and vertical left/right layouts are verified on the connected single-screen Mac mini. The side docks are 76×360 pt collapsed or 330×360 pt with an inward preview.
+The native menu flows and vertical left/right layouts are verified on the connected single-screen Mac mini. The top Liquid Glass capsule is 312×50 pt collapsed (336×72 pt host) or 404×272 pt expanded (428×294 pt host); side docks are 76×296 pt collapsed (96×316 pt host) or 364×296 pt with an inward studio (384×316 pt host).
 Physical dragging and multi-monitor behavior need a native end-to-end run;
 geometry regression tests are not a substitute for that run.
 

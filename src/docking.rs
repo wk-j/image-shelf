@@ -21,7 +21,8 @@ fn snapped(mut r: Rect, screen: Rect, visible: Rect, edge: Edge) -> Rect {
     match edge {
         Edge::Top => {
             r.x = screen.x + (screen.w - r.w) / 2.;
-            r.y = screen.y + screen.h - r.h;
+            // Float directly below the macOS menu bar / hardware notch (visibleFrame top).
+            r.y = visible.y + visible.h - r.h;
         }
         Edge::Left => {
             r.x = screen.x;
@@ -39,14 +40,18 @@ fn snapped(mut r: Rect, screen: Rect, visible: Rect, edge: Edge) -> Rect {
     }
     r
 }
-fn target(r: Rect, screen: Rect, _visible: Rect, p: (f64, f64)) -> Edge {
+
+fn target(r: Rect, screen: Rect, visible: Rect, p: (f64, f64)) -> Edge {
     if (p.0 - screen.x).abs() <= 28. || (r.x - screen.x).abs() <= 28. {
         Edge::Left
     } else if (p.0 - screen.x - screen.w).abs() <= 28.
         || (r.x + r.w - screen.x - screen.w).abs() <= 28.
     {
         Edge::Right
-    } else if (p.1 - screen.y - screen.h).abs() <= 28. {
+    } else if (p.1 - screen.y - screen.h).abs() <= 36.
+        || (p.1 - visible.y - visible.h).abs() <= 28.
+        || (r.y + r.h - visible.y - visible.h).abs() <= 28.
+    {
         Edge::Top
     } else {
         Edge::Free
@@ -289,7 +294,7 @@ mod tests {
             };
             assert_eq!(snapped(r, s, v, Edge::Right).x, 1596.);
             let top = snapped(r, s, v, Edge::Top);
-            assert_eq!((top.x, top.y), (798., 1080. - h));
+            assert_eq!((top.x, top.y), (798., 1055. - h));
         }
         assert_eq!(
             target(

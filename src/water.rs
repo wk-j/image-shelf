@@ -131,19 +131,7 @@ impl Compositor<State> for Water {
         let mut values = vec![f.size.0 as f32, f.size.1 as f32, f.rt.env.scale, 0.];
         for i in 0..5 {
             if let Some((p, t, _)) = f.rt.state.ripples.get(i) {
-                values.extend([
-                    p[0] + if matches!(
-                        f.rt.state.dock.edge,
-                        crate::docking::Edge::Left | crate::docking::Edge::Right
-                    ) {
-                        0.
-                    } else {
-                        crate::SHOULDER
-                    },
-                    p[1],
-                    (f.rt.state.clock - t) as f32,
-                    1.,
-                ]);
+                values.extend([p[0], p[1], (f.rt.state.clock - t) as f32, 1.]);
             } else {
                 values.extend([0.; 4]);
             }

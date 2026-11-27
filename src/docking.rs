@@ -32,7 +32,10 @@ fn snapped(mut r: Rect, screen: Rect, visible: Rect, edge: Edge) -> Rect {
             r.x = screen.x + screen.w - r.w;
             r.y = visible.y + (visible.h - r.h) / 2.;
         }
-        Edge::Free => {}
+        Edge::Free => {
+            r.x =
+                r.x.clamp(visible.x, (visible.x + visible.w - r.w).max(visible.x));
+        }
     }
     if edge != Edge::Top {
         r.y =
@@ -42,15 +45,15 @@ fn snapped(mut r: Rect, screen: Rect, visible: Rect, edge: Edge) -> Rect {
 }
 
 fn target(r: Rect, screen: Rect, visible: Rect, p: (f64, f64)) -> Edge {
-    if (p.0 - screen.x).abs() <= 28. || (r.x - screen.x).abs() <= 28. {
+    if (p.0 - screen.x).abs() <= 18. || (r.x - screen.x).abs() <= 18. {
         Edge::Left
-    } else if (p.0 - screen.x - screen.w).abs() <= 28.
-        || (r.x + r.w - screen.x - screen.w).abs() <= 28.
+    } else if (p.0 - screen.x - screen.w).abs() <= 18.
+        || (r.x + r.w - screen.x - screen.w).abs() <= 18.
     {
         Edge::Right
-    } else if (p.1 - screen.y - screen.h).abs() <= 36.
-        || (p.1 - visible.y - visible.h).abs() <= 28.
-        || (r.y + r.h - visible.y - visible.h).abs() <= 28.
+    } else if (p.1 - screen.y - screen.h).abs() <= 24.
+        || (p.1 - visible.y - visible.h).abs() <= 18.
+        || (r.y + r.h - visible.y - visible.h).abs() <= 18.
     {
         Edge::Top
     } else {
@@ -62,9 +65,14 @@ pub struct Dock {
     pub edge: Edge,
     anchor: Option<(Rect, Rect)>,
     last_frame: Option<Rect>,
+    drag_origin: Option<(Rect, (f64, f64))>,
     moving: bool,
 }
 impl Dock {
+    #[cfg(test)]
+    pub fn is_dragging(&self) -> bool {
+        self.moving
+    }
     fn observe(&mut self, r: Rect, mouse_down: bool) -> (bool, bool) {
         let resizing = self
             .last_frame
@@ -154,6 +162,8 @@ mod native {
             let r = frame(w);
             if let Some((screen, visible)) = screens((r.x + r.w / 2., r.y + r.h / 2.)) {
                 dock.edge = edge;
+                dock.drag_origin = None;
+                dock.moving = false;
                 dock.anchor = Some((screen, visible));
                 shadow(w, edge);
                 let r = snapped(r, screen, visible, edge);
@@ -162,8 +172,81 @@ mod native {
             }
         }
     }
-    pub fn tick(dock: &mut Dock) -> bool {
+    // Direct screen-space dragging via NSEvent::mouseLocation + setFrameOrigin:.
+    // Unlike AppKit's performWindowDragWithEvent:, this works reliably on nonactivating
+    // borderless NSPanel windows without stealing focus from the foreground app.
+    pub fn drag_start(dock: &mut Dock) {
+        dock.moving = true;
         if rune::is_headless() {
+            return;
+        }
+        unsafe {
+            let w = window();
+            if w.is_null() {
+                return;
+            }
+            let r = frame(w);
+            let p: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            dock.drag_origin = Some((r, (p.x, p.y)));
+            dock.last_frame = Some(r);
+        }
+    }
+    pub fn drag_move(dock: &mut Dock) {
+        if rune::is_headless() {
+            return;
+        }
+        let Some((start_r, (mx, my))) = dock.drag_origin else {
+            return;
+        };
+        unsafe {
+            let w = window();
+            if w.is_null() {
+                return;
+            }
+            let p: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            let next = Rect {
+                x: start_r.x + (p.x - mx),
+                y: start_r.y + (p.y - my),
+                ..start_r
+            };
+            move_to(w, next);
+            dock.last_frame = Some(next);
+        }
+    }
+    pub fn drag_end(dock: &mut Dock, cancelled: bool) -> bool {
+        dock.moving = false;
+        let origin = dock.drag_origin.take();
+        if rune::is_headless() {
+            return false;
+        }
+        unsafe {
+            let w = window();
+            if w.is_null() {
+                return false;
+            }
+            if cancelled {
+                if let Some((start_r, _)) = origin {
+                    move_to(w, start_r);
+                    dock.last_frame = Some(start_r);
+                }
+                return false;
+            }
+            let r = frame(w);
+            let p: NSPoint = msg_send![class!(NSEvent), mouseLocation];
+            let old_edge = dock.edge;
+            if let Some((screen, visible)) = screens((p.x, p.y)) {
+                dock.edge = target(r, screen, visible, (p.x, p.y));
+                dock.anchor = Some((screen, visible));
+                shadow(w, dock.edge);
+                let placed = snapped(r, screen, visible, dock.edge);
+                move_to(w, placed);
+                dock.last_frame = Some(placed);
+            }
+            dock.edge != old_edge
+        }
+    }
+    pub fn tick(dock: &mut Dock) -> bool {
+        if rune::is_headless() || dock.drag_origin.is_some() {
             return false;
         }
         unsafe {
@@ -203,7 +286,7 @@ mod native {
     }
 }
 #[cfg(target_os = "macos")]
-pub use native::{place, register, tick};
+pub use native::{drag_end, drag_move, drag_start, place, register, tick};
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +393,26 @@ mod tests {
             ),
             Edge::Free
         );
+    }
+
+    #[test]
+    fn free_drop_anywhere_on_screen_preserves_position() {
+        let s = Rect {
+            x: 0.,
+            y: 0.,
+            w: 1920.,
+            h: 1080.,
+        };
+        let v = Rect { h: 1055., ..s };
+        let dropped = Rect {
+            x: 420.,
+            y: 410.,
+            w: 336.,
+            h: 72.,
+        };
+        let edge = target(dropped, s, v, (580., 440.));
+        assert_eq!(edge, Edge::Free);
+        let placed = snapped(dropped, s, v, edge);
+        assert_eq!((placed.x, placed.y), (420., 410.));
     }
 }

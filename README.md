@@ -29,9 +29,9 @@ To build from source, run `./scripts/bundle.sh`, then open `out/Image Shelf.app`
 ## Usage
 
 - Keep the app running to capture copied images.
-- Scroll one image per wheel step/swipe, click a thumbnail in the 3-up capsule or 3×2 inspector grid, or use **‹ Prev** / **Next ›**. Trackpad momentum does not advance selection.
+- Scroll one image per wheel step/swipe, click a thumbnail in the 3-up capsule or 3×2 inspector grid, or use **‹ Prev** / **Next ›** (and **↑** / **↓** on side docks) to jump by a full page. Trackpad momentum does not advance selection.
 - Click anywhere on the capsule header (or **+** / **−**) to smoothly expand or collapse the shelf; click **Copy** to copy the selected image immediately.
-- Drag the top grip pill or right-click → **Snap left**, **Snap right**, or **Return to top**. Side docks use vertical thumbnails and open a studio preview inward.
+- Drag the **⋮⋮** grip handle (or side studio title bar) to move the shelf anywhere on screen, or drag to a screen edge / right-click → **Snap left**, **Snap right**, **Return to top**, or **Float freely**. Side docks use vertical thumbnails and open a studio preview inward.
 - Drag a thumbnail or preview into an app that accepts images/files.
 - Right-click for **Copy image**, **Pause/Resume**, **Open history folder**, or **Quit**.
 

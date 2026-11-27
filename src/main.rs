@@ -622,6 +622,11 @@ glyph!(
     "shelf-empty",
     "M2.5 3.5H13.5V12.5H2.5ZM4.5 10.5L6.8 8.2L8.6 10L10.4 8.5L12 10.5"
 );
+static GRIP: rune::Icon = rune::Icon {
+    name: "shelf-grip",
+    view: 16.,
+    body: r#"<circle cx="5.5" cy="4.5" r="1.15" fill="currentColor"/><circle cx="10.5" cy="4.5" r="1.15" fill="currentColor"/><circle cx="5.5" cy="8" r="1.15" fill="currentColor"/><circle cx="10.5" cy="8" r="1.15" fill="currentColor"/><circle cx="5.5" cy="11.5" r="1.15" fill="currentColor"/><circle cx="10.5" cy="11.5" r="1.15" fill="currentColor"/>"#,
+};
 
 fn copy_selected(s: &mut State, tx: &mut Tx) {
     if let Some(e) = s.entries.get(s.selected)
@@ -758,6 +763,46 @@ impl State {
         self.quick_start = ensure_visible(self.quick_start, self.selected, 3, len);
         self.grid_start = ensure_visible(self.grid_start, self.selected, 6, len);
     }
+
+    fn page_grid(&mut self, forward: bool) {
+        let len = self.entries.len();
+        if len <= 6 {
+            return;
+        }
+        let max_start = len - 6;
+        let cur = self.grid_start.min(max_start);
+        let next = if forward {
+            (cur + 6).min(max_start)
+        } else {
+            cur.saturating_sub(6)
+        };
+        if next != cur {
+            self.grid_start = next;
+            self.selected = next;
+            self.scroll = ensure_visible(self.scroll.round().max(0.) as usize, next, 4, len) as f32;
+            self.quick_start = ensure_visible(self.quick_start, next, 3, len);
+        }
+    }
+
+    fn page_rail(&mut self, forward: bool) {
+        let len = self.entries.len();
+        if len <= 4 {
+            return;
+        }
+        let max_start = len - 4;
+        let cur = (self.scroll.round().max(0.) as usize).min(max_start);
+        let next = if forward {
+            (cur + 4).min(max_start)
+        } else {
+            cur.saturating_sub(4)
+        };
+        if next != cur {
+            self.scroll = next as f32;
+            self.selected = next;
+            self.quick_start = ensure_visible(self.quick_start, next, 3, len);
+            self.grid_start = ensure_visible(self.grid_start, next, 6, len);
+        }
+    }
 }
 
 fn wheel(s: &mut State, event: rune::WheelEvent, tx: &mut Tx) -> bool {
@@ -879,6 +924,7 @@ fn menu(s: &State) -> rune::PopupMenu {
         .item(rune::PopupItem::new("snap-left", "Snap left"))
         .item(rune::PopupItem::new("snap-right", "Snap right"))
         .item(rune::PopupItem::new("snap-top", "Return to top"))
+        .item(rune::PopupItem::new("snap-free", "Float freely"))
         .separator()
         .item(rune::PopupItem::new("status", &s.status).enabled(false))
         .separator()
@@ -909,6 +955,7 @@ fn menu_action(s: &mut State, picked: Option<&str>, tx: &mut Tx) {
         Some("snap-left") => set_edge(s, docking::Edge::Left, tx),
         Some("snap-right") => set_edge(s, docking::Edge::Right, tx),
         Some("snap-top") => set_edge(s, docking::Edge::Top, tx),
+        Some("snap-free") => set_edge(s, docking::Edge::Free, tx),
         Some("quit") => tx.quit(),
         _ => {}
     }
@@ -945,6 +992,19 @@ fn set_edge(s: &mut State, edge: docking::Edge, tx: &mut Tx) {
     docking::place(&mut s.dock, edge);
     tx.resize_window_instant(shelf_size(s));
     tx.wake_after(Duration::from_millis(16));
+}
+
+fn on_window_drag(s: &mut State, drag: &mut rune::Drag, tx: &mut Tx) {
+    match drag.phase {
+        rune::Phase::Down => docking::drag_start(&mut s.dock),
+        rune::Phase::Move => docking::drag_move(&mut s.dock),
+        rune::Phase::Up => {
+            if docking::drag_end(&mut s.dock, drag.cancelled()) {
+                tx.resize_window_instant(shelf_size(s));
+                tx.wake_after(Duration::from_millis(16));
+            }
+        }
+    }
 }
 
 // Smoked-quartz Liquid Glass surface:
@@ -1009,8 +1069,10 @@ fn side_view(s: &State) -> El {
     };
     let rail_local_x = if right { card_w - SIDE_RAIL_W } else { 0. };
     let ambient = s.entries.get(s.selected).map_or(0x38bdf8, |e| e.ambient);
-    let has_prev = s.selected > 0;
-    let has_next = s.selected + 1 < s.entries.len();
+    let max_rail = s.entries.len().saturating_sub(4);
+    let cur_rail = (s.scroll.round().max(0.) as usize).min(max_rail);
+    let has_prev = cur_rail > 0;
+    let has_next = cur_rail < max_rail;
 
     let mut shell = glass_shell(shell_x, SIDE_MARGIN_Y, card_w, SIDE_CARD_H, card_r, ambient);
 
@@ -1044,17 +1106,16 @@ fn side_view(s: &State) -> El {
         )
         .child(
             el().key("notch-header")
-                .absolute(rail_local_x + 23., 8.)
-                .size(22., 24.)
+                .absolute(rail_local_x + 21., 8.)
+                .size(26., 24.)
+                .radius(7.)
                 .hit()
-                .window_drag()
                 .cursor(rune::Cursor::Grab)
+                .hover(c(0xffffff).alpha(0.10))
+                .help("Drag to move anywhere on screen")
+                .on_drag(on_window_drag)
                 .center()
-                .child(
-                    el().size(16., 3.5)
-                        .radius(1.75)
-                        .fill(c(0xffffff).alpha(0.28)),
-                ),
+                .child(rune::icon(&GRIP, 13.).color(c(0xffffff).alpha(0.42))),
         );
 
     // 2. Vertical 4-Up Thumbnail Strip (56x44 rounded-xl cards, exact match to demo).
@@ -1171,18 +1232,14 @@ fn side_view(s: &State) -> El {
         };
         shell = shell
             .child(
-                nav_btn(&UP, rail_local_x + 9., has_prev, "Previous image")
+                nav_btn(&UP, rail_local_x + 9., has_prev, "Previous page")
                     .key("select-previous")
-                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
+                    .on_press(|s: &mut State| s.page_rail(false)),
             )
             .child(
-                nav_btn(&DOWN, rail_local_x + 29., has_next, "Next image")
+                nav_btn(&DOWN, rail_local_x + 29., has_next, "Next page")
                     .key("select-next")
-                    .on_press(|s: &mut State| {
-                        if s.selected + 1 < s.entries.len() {
-                            s.step_to(s.selected + 1);
-                        }
-                    }),
+                    .on_press(|s: &mut State| s.page_rail(true)),
             )
             .child(
                 nav_btn(
@@ -1210,6 +1267,14 @@ fn side_view(s: &State) -> El {
 
         if let Some(e) = s.entries.get(s.selected) {
             studio = studio
+                .child(
+                    el().absolute(0., 0.)
+                        .size(228., 44.)
+                        .hit()
+                        .cursor(rune::Cursor::Grab)
+                        .help("Drag to move anywhere on screen")
+                        .on_drag(on_window_drag),
+                )
                 .child(sans_label(e.title(s.selected), 12., 600., c(0xf8fafc)).absolute(12., 11.))
                 .child(
                     mono_label(
@@ -1293,18 +1358,14 @@ fn side_view(s: &State) -> El {
         studio = studio
             .child(copy_button(s, 12., 256., 200., 28., true))
             .child(
-                step_sq(&UP, 218., has_prev, "Previous image")
+                step_sq(&UP, 218., has_prev, "Previous page")
                     .key("select-previous")
-                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
+                    .on_press(|s: &mut State| s.page_rail(false)),
             )
             .child(
-                step_sq(&DOWN, 250., has_next, "Next image")
+                step_sq(&DOWN, 250., has_next, "Next page")
                     .key("select-next")
-                    .on_press(|s: &mut State| {
-                        if s.selected + 1 < s.entries.len() {
-                            s.step_to(s.selected + 1);
-                        }
-                    }),
+                    .on_press(|s: &mut State| s.page_rail(true)),
             );
 
         shell = shell.child(studio);
@@ -1353,8 +1414,10 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
     };
     let card_r = 22.;
     let ambient = s.entries.get(s.selected).map_or(0x38bdf8, |e| e.ambient);
-    let has_prev = s.selected > 0;
-    let has_next = s.selected + 1 < s.entries.len();
+    let max_grid = s.entries.len().saturating_sub(6);
+    let cur_grid = s.grid_start.min(max_grid);
+    let has_prev = cur_grid > 0;
+    let has_next = cur_grid < max_grid;
 
     let mut shell = glass_shell(TOP_PAD_X, TOP_PAD_TOP, card_w, card_h, card_r, ambient);
 
@@ -1373,18 +1436,23 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
             .on_press_tx(toggle),
     );
 
-    // Subtle top-rim window-drag grip pill so dragging the top edge moves/snaps the window natively
-    // without blocking click-to-expand across the capsule body.
+    // Tactile 6-dot drag grip handle right next to Copy so the window can be grabbed
+    // and moved freely anywhere on screen (or snapped back to top/left/right edges).
     shell = shell.child(
         el().key("notch-header")
-            .absolute((card_w - 48.) / 2., 0.)
-            .size(48., 11.)
+            .absolute(card_w - 134., 11.)
+            .size(30., 28.)
+            .radius(10.)
+            .continuous_corners()
+            .fill(c(0xffffff).alpha(0.07))
+            .border(0.7, c(0xffffff).alpha(0.12))
             .hit()
-            .window_drag()
             .cursor(rune::Cursor::Grab)
-            .help("Drag to snap to left, right, or top screen edge")
+            .hover(c(0xffffff).alpha(0.16))
+            .help("Drag to move anywhere on screen")
+            .on_drag(on_window_drag)
             .center()
-            .child(el().size(24., 3.).radius(1.5).fill(c(0xffffff).alpha(0.22))),
+            .child(rune::icon(&GRIP, 14.).color(c(0xffffff).alpha(0.62))),
     );
 
     // 2. Left 3-Up Landscape Quick Strip + Monospace `+N` Counter (1:1 match to 02 · Liquid Glass demo).
@@ -1696,18 +1764,14 @@ fn view(s: &State, _: &mut Cx<State>) -> El {
         };
         inspector = inspector
             .child(
-                pager_btn("‹ Prev", 10., has_prev, "Previous image")
+                pager_btn("‹ Prev", 10., has_prev, "Previous page")
                     .key("select-previous")
-                    .on_press(|s: &mut State| s.step_to(s.selected.saturating_sub(1))),
+                    .on_press(|s: &mut State| s.page_grid(false)),
             )
             .child(
-                pager_btn("Next ›", 65., has_next, "Next image")
+                pager_btn("Next ›", 65., has_next, "Next page")
                     .key("select-next")
-                    .on_press(|s: &mut State| {
-                        if s.selected + 1 < s.entries.len() {
-                            s.step_to(s.selected + 1);
-                        }
-                    }),
+                    .on_press(|s: &mut State| s.page_grid(true)),
             );
 
         studio = studio.child(inspector);
@@ -1803,9 +1867,9 @@ mod tests {
         );
         rt.frame(0.);
 
-        // Click open capsule space (center-right of header, away from thumbnails/Copy/+):
+        // Click open capsule space (`+3` / header area left of the drag grip):
         // must toggle expand just like clicking the island in the demo!
-        let body_x = TOP_PAD_X + 185.;
+        let body_x = TOP_PAD_X + 160.;
         let body_y = TOP_PAD_TOP + 28.;
         rt.pointer_move(body_x, body_y);
         rt.pointer_down(body_x, body_y);
@@ -1953,23 +2017,27 @@ mod tests {
         rt.state.expanded = true;
         rt.frame(0.);
 
-        // Top-rim grip starts native window drag.
-        let grip_x = TOP_PAD_X + EXPANDED_CARD_W / 2.;
-        let grip_y = TOP_PAD_TOP + 5.;
+        // Drag grip starts direct screen-space window dragging and releases cleanly.
+        let grip_x = TOP_PAD_X + EXPANDED_CARD_W - 119.;
+        let grip_y = TOP_PAD_TOP + 25.;
         rt.pointer_move(grip_x, grip_y);
         rt.pointer_down(grip_x, grip_y);
-        assert!(
-            rt.take_titlebar_action().is_some(),
-            "top grip must start a native window drag"
-        );
-        rt.pointer_up(grip_x, grip_y);
         rt.frame(0.016);
+        assert!(
+            rt.state.dock.is_dragging(),
+            "drag grip must start direct window dragging"
+        );
+        rt.pointer_move(grip_x + 40., grip_y + 40.);
+        rt.frame(0.016);
+        rt.pointer_up(grip_x + 40., grip_y + 40.);
+        rt.frame(0.016);
+        assert!(!rt.state.dock.is_dragging());
 
         rt.wheel_xy(TOP_PAD_X + 300., TOP_PAD_TOP + 150., 0., -48.);
         rt.frame(1. / 60.);
         assert_eq!(rt.state.selected, 1);
 
-        // Inspector `Next ›` button advances selection without triggering water.
+        // With 6 items all fitting on 1 page of the 3x2 grid, clicking `Next ›` is a no-op and never triggers water.
         let next_btn_x = TOP_PAD_X + 266. + 90.;
         let next_btn_y = TOP_PAD_TOP + COMPACT_CARD_H + 11. + 174.;
         rt.pointer_move(next_btn_x, next_btn_y);
@@ -1977,19 +2045,19 @@ mod tests {
         rt.pointer_up(next_btn_x, next_btn_y);
         rt.frame(1. / 60.);
         assert_eq!(
-            rt.state.selected, 2,
-            "inspector Next button advances selection"
+            rt.state.selected, 1,
+            "single-page Next button stays on page 1"
         );
         assert!(rt.state.ripples.is_empty());
 
         rt.state.clock += 0.3;
         rt.wheel_xy(TOP_PAD_X + 300., TOP_PAD_TOP + 150., -99999., 0.);
         rt.frame(1. / 60.);
-        assert_eq!(rt.state.selected, 3, "large delta moves only one image");
+        assert_eq!(rt.state.selected, 2, "large delta moves only one image");
         rt.state.clock += 0.3;
         rt.wheel_xy(TOP_PAD_X + 300., TOP_PAD_TOP + 150., 99999., 0.);
         rt.frame(1. / 60.);
-        assert_eq!(rt.state.selected, 2);
+        assert_eq!(rt.state.selected, 1);
 
         rt.state.pointer = [TOP_PAD_X + 28., TOP_PAD_TOP + 24.];
         for _ in 0..10 {
@@ -2005,21 +2073,21 @@ mod tests {
                 .phase(rune::GesturePhase::Began),
         );
         rt.frame(0.016);
-        assert_eq!(rt.state.selected, 2, "small trackpad noise is ignored");
+        assert_eq!(rt.state.selected, 1, "small trackpad noise is ignored");
         rt.wheel_event(
             rune::WheelEvent::new(0., -20.)
                 .at(TOP_PAD_X + 28., TOP_PAD_TOP + 24.)
                 .precise(true),
         );
         rt.frame(0.016);
-        assert_eq!(rt.state.selected, 3);
+        assert_eq!(rt.state.selected, 2);
         rt.wheel_event(
             rune::WheelEvent::new(0., -400.)
                 .at(TOP_PAD_X + 28., TOP_PAD_TOP + 24.)
                 .precise(true),
         );
         rt.frame(0.016);
-        assert_eq!(rt.state.selected, 3, "same swipe cannot skip images");
+        assert_eq!(rt.state.selected, 2, "same swipe cannot skip images");
         rt.wheel_event(
             rune::WheelEvent::new(0., 0.)
                 .at(TOP_PAD_X + 28., TOP_PAD_TOP + 24.)
@@ -2034,7 +2102,7 @@ mod tests {
                 .phase(rune::GesturePhase::Began),
         );
         rt.frame(0.016);
-        assert_eq!(rt.state.selected, 3, "inertia must not change selection");
+        assert_eq!(rt.state.selected, 2, "inertia must not change selection");
         rt.wheel_event(
             rune::WheelEvent::new(0., 0.)
                 .at(TOP_PAD_X + 28., TOP_PAD_TOP + 24.)
@@ -2050,7 +2118,7 @@ mod tests {
                 .phase(rune::GesturePhase::Began),
         );
         rt.frame(0.016);
-        assert_eq!(rt.state.selected, 2, "next reverse swipe moves one image");
+        assert_eq!(rt.state.selected, 1, "next reverse swipe moves one image");
 
         let mut s = rt.state;
         let item = s.drag(0).unwrap();
@@ -2200,5 +2268,94 @@ mod tests {
             quick_before, quick_after,
             "top 3-up thumbnails must stay in place on click"
         );
+    }
+
+    #[test]
+    fn prev_and_next_buttons_navigate_by_full_page() {
+        let mut s = State::new();
+        s.demo = true;
+        s.fixtures();
+        for i in 0..9 {
+            let e = &s.entries[i % 6];
+            s.entries.push(Entry {
+                path: PathBuf::from(format!("Page_{i}.png")),
+                png: e.png.clone(),
+                image: None,
+                size: e.size,
+                bytes_len: e.bytes_len,
+                ambient: e.ambient,
+                has_alpha: e.has_alpha,
+            });
+        }
+        assert_eq!(s.entries.len(), 15);
+
+        // 1. Top expanded 3x2 inspector: Next › / ‹ Prev pages by 6 (0 -> 6 -> 9 -> 3 -> 0).
+        s.expanded = true;
+        let mut rt = rune::Runtime::new(
+            s,
+            view,
+            (EXPANDED_WIN_W, EXPANDED_WIN_H),
+            rune::Env::new(true, 1.),
+        );
+        rt.frame(0.);
+        let next_x = TOP_PAD_X + 266. + 90.;
+        let prev_x = TOP_PAD_X + 266. + 35.;
+        let btn_y = TOP_PAD_TOP + COMPACT_CARD_H + 11. + 174.;
+
+        rt.pointer_move(next_x, btn_y);
+        rt.pointer_down(next_x, btn_y);
+        rt.pointer_up(next_x, btn_y);
+        rt.frame(1. / 60.);
+        assert_eq!((rt.state.grid_start, rt.state.selected), (6, 6));
+
+        rt.pointer_down(next_x, btn_y);
+        rt.pointer_up(next_x, btn_y);
+        rt.frame(1. / 60.);
+        assert_eq!((rt.state.grid_start, rt.state.selected), (9, 9));
+
+        rt.pointer_move(prev_x, btn_y);
+        rt.pointer_down(prev_x, btn_y);
+        rt.pointer_up(prev_x, btn_y);
+        rt.frame(1. / 60.);
+        assert_eq!((rt.state.grid_start, rt.state.selected), (3, 3));
+
+        rt.pointer_down(prev_x, btn_y);
+        rt.pointer_up(prev_x, btn_y);
+        rt.frame(1. / 60.);
+        assert_eq!((rt.state.grid_start, rt.state.selected), (0, 0));
+
+        // 2. Side dock expanded rail: ↓ / ↑ pages by 4 (0 -> 4 -> 8 -> 4 -> 0).
+        let mut s2 = rt.state;
+        s2.dock.edge = docking::Edge::Left;
+        s2.expanded = true;
+        s2.scroll = 0.;
+        s2.selected = 0;
+        let mut rt2 = rune::Runtime::new(
+            s2,
+            view,
+            (SIDE_EXPANDED_WIN_W, SIDE_WIN_H),
+            rune::Env::new(true, 1.),
+        );
+        rt2.frame(0.);
+        let down_x = SIDE_MARGIN_EDGE + SIDE_RAIL_W + 264.;
+        let up_x = SIDE_MARGIN_EDGE + SIDE_RAIL_W + 232.;
+        let side_y = SIDE_MARGIN_Y + 270.;
+
+        rt2.pointer_move(down_x, side_y);
+        rt2.pointer_down(down_x, side_y);
+        rt2.pointer_up(down_x, side_y);
+        rt2.frame(1. / 60.);
+        assert_eq!((rt2.state.scroll as usize, rt2.state.selected), (4, 4));
+
+        rt2.pointer_down(down_x, side_y);
+        rt2.pointer_up(down_x, side_y);
+        rt2.frame(1. / 60.);
+        assert_eq!((rt2.state.scroll as usize, rt2.state.selected), (8, 8));
+
+        rt2.pointer_move(up_x, side_y);
+        rt2.pointer_down(up_x, side_y);
+        rt2.pointer_up(up_x, side_y);
+        rt2.frame(1. / 60.);
+        assert_eq!((rt2.state.scroll as usize, rt2.state.selected), (4, 4));
     }
 }
